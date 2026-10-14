@@ -1,7 +1,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 
-const MODEL = 'gemini-3.1-flash-lite-image';
+const MODEL = 'gemini-3.1-flash-image';
 const FALLBACK_URL =
   '/assets/images/blueprint_3d_isometric_1791610246387.jpg';
 
@@ -42,15 +42,6 @@ export default async function handler(req, res) {
     const targetPrompt =
       prompt?.trim() ||
       'Create a detailed 3D isometric enterprise cloud architecture blueprint. Use a professional enterprise architecture diagram style, clearly organized components, precise network connections, readable labels, and a 16:9 landscape composition.';
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
 
     const response = await ai.models.generateContent({
       model: MODEL,
