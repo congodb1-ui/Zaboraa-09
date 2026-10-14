@@ -1,4 +1,4 @@
-
+```js
 import { GoogleGenAI } from '@google/genai';
 
 const MODEL = 'gemini-3.1-flash-image';
@@ -18,7 +18,6 @@ export default async function handler(req, res) {
 
   if (!apiKey) {
     console.error('GEMINI_API_KEY is not configured.');
-
     return res.status(500).json({
       success: false,
       error: 'Image generation is not configured.',
@@ -27,6 +26,11 @@ export default async function handler(req, res) {
   }
 
   try {
+    const ai = new GoogleGenAI({
+      vertexai: true,
+      apiKey,
+    });
+
     const prompt = req.body?.prompt;
 
     if (
@@ -47,13 +51,13 @@ export default async function handler(req, res) {
       model: MODEL,
       contents: targetPrompt,
       config: {
+        responseModalities: ['TEXT', 'IMAGE'],
         imageConfig: {
           aspectRatio: '16:9',
         },
       },
     });
 
-    // Image data is returned in the response's content parts.
     const parts =
       response.candidates?.flatMap(
         (candidate) => candidate.content?.parts || []
@@ -101,3 +105,4 @@ export default async function handler(req, res) {
     });
   }
 }
+```
