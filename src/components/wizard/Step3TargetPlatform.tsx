@@ -365,8 +365,8 @@ export const Step3TargetPlatform: React.FC<Step3TargetPlatformProps> = ({
                   : 'border-rose-500 text-rose-300 focus:border-rose-400'
               }`}
             />
-            {sddcCidrValidation.reason && (
-              <p className="text-[11px] text-rose-400 mt-1 font-mono">{sddcCidrValidation.reason}</p>
+            {!sddcCidrValidation.isValid && sddcCidrValidation.message && (
+              <p className="text-[11px] text-rose-400 mt-1 font-mono">{sddcCidrValidation.message}</p>
             )}
           </div>
 

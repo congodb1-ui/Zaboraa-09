@@ -319,6 +319,7 @@ export function mapWizardToLegacy(
     projectDate: wizard.projectDate,
     environments: baseEnvs,
     interconnectLinks: existingModel?.interconnectLinks || [],
+    activeServiceIds: existingModel?.activeServiceIds || [],
     resilience: {
       drTopology: wizard.drConfig.strategy as any,
       targetRpoMinutes: wizard.drConfig.rpoMinutes,

@@ -1198,7 +1198,10 @@ export const DesignGeneratorPage: React.FC = () => {
           failbackApproach: 'Reverse Delta Sync'
         },
         activeServiceIds: [],
-        importedLegacyContext: importedLegacyContext || {}
+        importedLegacyContext: {
+          ...(importedLegacyContext || {}),
+          ...(wizardState.preservedLegacyFields ? { preservedExtraFields: { ...wizardState.preservedLegacyFields } } : {})
+        }
       };
       writebackLegacyStorage(activeModel);
       setSaveSuccessNotice('Blueprint state saved successfully. Legacy localStorage synchronized non-destructively.');
@@ -1494,6 +1497,19 @@ export const DesignGeneratorPage: React.FC = () => {
       setDrRtoMinutes(45);
       setDrStrategy('Hot Standby (Full Cluster)');
     }
+
+    setWizardState((prev) => ({
+      ...prev,
+      activeTemplate: template,
+      targetPlatform:
+        template === 'nutanix-onprem' || template === 'nutanix-to-nc2' || template === 'vmware-to-nc2'
+          ? 'nc2-azure'
+          : template === 'vmc-aws' || template === 'aws-native'
+          ? 'vmc-aws'
+          : template === 'gcve' || template === 'gcp-native'
+          ? 'gcve'
+          : 'avs-gen1'
+    }));
   };
 
   // Safe wrapper that enforces the customization check

@@ -77,7 +77,7 @@ export const OFFICIAL_CITATIONS: Record<string, OfficialDocCitation> = {
     verificationStatus: 'verified'
   },
   vmcAws: {
-    vendor: 'AWS / VMware / Broadcom',
+    vendor: 'VMware / Broadcom',
     documentTitle: 'VMware Cloud on AWS i4i.metal Architecture & FSx ONTAP Integration',
     sourceUrl: 'https://docs.aws.amazon.com/vmware-cloud-on-aws/latest/userguide/i4i-instances.html',
     applicableVersions: 'VMC SDDC 1.24+, i4i.metal',

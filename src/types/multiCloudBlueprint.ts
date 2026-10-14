@@ -124,6 +124,7 @@ export interface ImportedLegacyContext {
   rawBlueprintState?: any;
   rawDrExport?: any;
   rawSizingExport?: any;
+  preservedExtraFields?: Record<string, unknown>;
 }
 
 export interface DynamicTopologyModel {
@@ -135,7 +136,7 @@ export interface DynamicTopologyModel {
   interconnectLinks?: InterconnectLink[];
   resilience: ResilienceConfig;
   migrationAssessment?: MigrationAssessmentConfig;
-  activeServiceIds: string[];
+  activeServiceIds?: string[];
   importedLegacyContext: ImportedLegacyContext;
 }
 
