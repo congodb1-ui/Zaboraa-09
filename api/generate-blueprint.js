@@ -1,4 +1,3 @@
-```js
 import { GoogleGenAI } from '@google/genai';
 
 const MODEL = 'gemini-3.1-flash-image';
