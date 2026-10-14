@@ -72,6 +72,41 @@ import {
   PaloAltoNetworksNvaIcon,
   FortinetFortiGateNvaIcon
 } from '../../components/icons/CloudArchitectureIcons';
+import {
+  ClusterNodeClass,
+  EngineeringAssumptions,
+  DEFAULT_ENGINEERING_ASSUMPTIONS,
+  calculateClusterCapacity,
+  calculateTotalInfrastructureCapacity,
+  evaluateFailureScenario,
+  convertStorageUnits
+} from '../../utils/architectureCalculator';
+import {
+  parseAndValidateCidr,
+  checkSubnetOverlap,
+  validateSddcPlatformCidr
+} from '../../utils/cidrUtils';
+import {
+  OFFICIAL_CITATIONS,
+  TARGET_NODE_SKU_CATALOGUE,
+  STORAGE_ATTACHMENT_CATALOGUE,
+  DR_ENGINE_CATALOGUE,
+  HARDWARE_VENDOR_CATALOGUE,
+  evaluateCrossTierCompatibility
+} from '../../data/cloudCompatibilityCatalogue';
+import {
+  WizardState,
+  createDefaultWizardState,
+  mapLegacyToWizard,
+  mapWizardToLegacy,
+  buildActivePromptString
+} from '../../types/wizardStateAdapter';
+import { WizardStepTabs, IndustryTemplatePreset } from '../../components/wizard/WizardStepTabs';
+import { Step1ScopeAndSource } from '../../components/wizard/Step1ScopeAndSource';
+import { Step2TransitAndSecurity } from '../../components/wizard/Step2TransitAndSecurity';
+import { Step3TargetPlatform } from '../../components/wizard/Step3TargetPlatform';
+import { Step4DisasterRecovery } from '../../components/wizard/Step4DisasterRecovery';
+import { LiveArchitectureSplitView } from '../../components/wizard/LiveArchitectureSplitView';
 
 interface VlanSubsegment {
   vlanId: number;
@@ -1027,6 +1062,11 @@ export const DesignGeneratorPage: React.FC = () => {
   const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'nutanix' | 'sddc' | 'native' | 'migration'>('all');
   const [canvasMode, setCanvasMode] = useState<'interactive' | 'static-vector'>('interactive');
 
+  // 4-Step Enterprise Wizard Navigation & Viewport Layout State
+  const [currentStep, setCurrentStep] = useState<number>(1);
+  const [layoutMode, setLayoutMode] = useState<'split' | 'form-only' | 'canvas-only'>('split');
+  const [wizardState, setWizardState] = useState<WizardState>(createDefaultWizardState);
+
   // Step 3 Tabbed Inspector State
   const [step3ActiveTab, setStep3ActiveTab] = useState<'topology' | 'networking' | 'dr'>('topology');
 
@@ -1094,6 +1134,10 @@ export const DesignGeneratorPage: React.FC = () => {
             : 'Pilot Light (3-Node Minimum)'
         );
 
+        // Hydrate unified wizard state
+        const hydratedWizard = mapLegacyToWizard(model, model.importedLegacyContext);
+        setWizardState(hydratedWizard);
+
         // Map to existing legacy variables to ensure 100% backward-compatibility with SVG/Canvas
         if (model.environments[0]) {
           setTotalVMCount(model.environments[0].vmCount ?? Math.round(model.environments[0].totalVcpu / 2.5));
@@ -1160,6 +1204,84 @@ export const DesignGeneratorPage: React.FC = () => {
       setSaveSuccessNotice('Blueprint state saved successfully. Legacy localStorage synchronized non-destructively.');
       setTimeout(() => setSaveSuccessNotice(null), 4000);
     }
+  };
+
+  // Synchronize wizard updates across canonical topology and legacy variables
+  const handleWizardStateChange = (updater: (prev: WizardState) => WizardState) => {
+    setWizardState((prev) => {
+      const next = updater(prev);
+      setCustomerName(next.customerName);
+      setArchitectName(next.architectName);
+      setProjectDate(next.projectDate);
+      setActiveTemplate(next.activeTemplate);
+      setConnectivity(next.connectivityCarrier as any);
+      setLandingZone(next.landingZonePattern as any);
+      setNvaFirewall(next.firewallProvider as any);
+      setWafSolution((next.wafSolution || 'Azure WAF on Application Gateway') as any);
+      setNodeSku(next.targetNodeSku);
+      setDecoupledStorageTB(next.decoupledStorageTB);
+      setDrEngine(next.drConfig.engine);
+      setDrRpoMinutes(next.drConfig.rpoMinutes);
+      setDrRtoMinutes(next.drConfig.rtoMinutes);
+      setDrStrategy(next.drConfig.strategy);
+      setMgmtCidrInput(next.sddcMgmtCidr);
+
+      if (next.targetPlatform.includes('avs')) {
+        setCloudPlatform('Azure VMware Solution');
+        setAvsGen(next.targetPlatform === 'avs-gen2' ? 'Gen 2' : 'Gen 1');
+      } else if (next.targetPlatform.includes('vmc')) {
+        setCloudPlatform('VMware Cloud on AWS');
+      } else if (next.targetPlatform.includes('gcve')) {
+        setCloudPlatform('Google Cloud VMware Engine');
+      }
+
+      setTopologyEnvironments((currentEnvs) => {
+        return currentEnvs.map((env) => {
+          if (env.tier === 'source' || env.id === 'env-onprem-vmware' || env.id === 'env-source-onprem') {
+            const totalHosts = next.clusters.reduce((acc, c) => acc + c.hostCount, 0);
+            const totalCores = next.clusters.reduce((acc, c) => acc + c.hostCount * c.sockets * c.coresPerSocket, 0);
+            const totalRam = next.clusters.reduce((acc, c) => acc + c.hostCount * c.ramGB, 0);
+            const totalStorage = next.clusters.reduce((acc, c) => acc + c.hostCount * c.storageTB, 0);
+            return {
+              ...env,
+              hostCount: totalHosts,
+              nodeSku: next.hardwareSku,
+              totalVcpu: totalCores * 2,
+              totalRamGB: totalRam,
+              storageTB: totalStorage,
+              cidrBlock: next.sourceMgmtCidr,
+              platform: next.sourcePlatform === 'nutanix' ? 'Nutanix AHV' : 'VMware vSphere'
+            };
+          }
+          if (env.tier === 'target' || env.id === 'env-avs-sddc' || env.id === 'env-target-cloud') {
+            return {
+              ...env,
+              hostCount: next.targetNodeCount,
+              nodeSku: next.targetNodeSku,
+              storageTB: next.decoupledStorageTB,
+              cidrBlock: next.sddcMgmtCidr,
+              platform:
+                next.targetPlatform === 'vmc-aws'
+                  ? 'VMware Cloud on AWS'
+                  : next.targetPlatform === 'gcve'
+                  ? 'Google Cloud VMware Engine'
+                  : next.targetPlatform === 'nc2-azure'
+                  ? 'Nutanix NC2 on Azure'
+                  : 'Azure VMware Solution'
+            };
+          }
+          return env;
+        });
+      });
+
+      return next;
+    });
+  };
+
+  const handleApplyIndustryTemplate = (preset: IndustryTemplatePreset) => {
+    handleWizardStateChange((prev) => preset.apply(prev));
+    setSaveSuccessNotice(`Applied "${preset.title}" architecture baseline.`);
+    setTimeout(() => setSaveSuccessNotice(null), 3500);
   };
 
   // Update Node SKU options when cloud platform changes
@@ -1940,12 +2062,24 @@ export const DesignGeneratorPage: React.FC = () => {
       ? `${decoupledStorageTB} TB external decoupled ${externalStorageName} storage datastores`
       : 'No external decoupled storage configured (100% all-flash local NVMe)';
 
-    const rpoDesc = drRpoMinutes === 0
-      ? '0-minute Synchronous Zero Data Loss RPO'
-      : `${drRpoMinutes}-minute RPO`;
-    const rtoDesc = `${drRtoMinutes}-minute RTO`;
-
-    return `Dark enterprise blueprint aesthetic 3D isometric architectural diagram of a production enterprise multi-cloud topology: "${trackTitle}" for ${customerName} (Lead Architect: ${architectName}, Date: ${projectDate}). Deep slate and midnight navy canvas background (#020617) with glowing neon cyan, teal, emerald, and electric violet network routes, glowing 3D hardware chassis, hyper-detailed isometric platform annotations. Infrastructure Environment Tiers: ${envDescriptions}. Network Interconnect Backbone: ${linkDescriptions}. Perimeter Security & Landing Zone: Physical connectivity via ${connectivity}, Landing Zone pattern "${landingZone}", Next-Gen Firewall inspection by ${nvaFirewall}, Web Application Firewall "${wafSolution}". Decoupled Storage Tier: ${storageNote}. Business Continuity & Resilience: Replicated via ${drEngine} with ${rpoDesc}, ${rtoDesc}, disaster recovery strategy "${drStrategy}". Isometric orthographic 3D projection, photorealistic enterprise blueprint technical drawing, illuminated fiber optic paths, 4K presentation grade clarity.`;
+    return buildActivePromptString({
+      trackTitle,
+      customerName,
+      architectName,
+      projectDate,
+      envDescriptions,
+      linkDescriptions,
+      connectivity,
+      landingZone,
+      nvaFirewall,
+      wafSolution,
+      storageNote,
+      drEnabled: wizardState.drEnabled,
+      drEngine,
+      drRpoMinutes,
+      drRtoMinutes,
+      drStrategy
+    });
   };
 
 // AI 3D Isometric Generation Trigger
@@ -2031,6 +2165,80 @@ export const DesignGeneratorPage: React.FC = () => {
     link.href = aiBlueprintResult.imageUrl;
     link.click();
   };
+
+  // Target SKU spec
+  const selectedTargetSku = TARGET_NODE_SKU_CATALOGUE.find(
+    (s) => s.sku === wizardState.targetNodeSku
+  ) || TARGET_NODE_SKU_CATALOGUE[0];
+
+  // Live Sizing Metrics
+  const liveTotalCapacity = calculateTotalInfrastructureCapacity(
+    wizardState.clusters.map((c) => ({
+      id: c.id,
+      name: c.name,
+      hostCount: c.hostCount,
+      sockets: c.sockets,
+      coresPerSocket: c.coresPerSocket,
+      hyperthreading: c.hyperthreading,
+      ramPerHostGB: c.ramGB,
+      rawStoragePerHostTB: c.storageTB
+    })),
+    wizardState.assumptions
+  );
+
+  const liveN1Result = evaluateFailureScenario(
+    wizardState.clusters.map((c) => ({
+      id: c.id,
+      name: c.name,
+      hostCount: c.hostCount,
+      sockets: c.sockets,
+      coresPerSocket: c.coresPerSocket,
+      hyperthreading: c.hyperthreading,
+      ramPerHostGB: c.ramGB,
+      rawStoragePerHostTB: c.storageTB
+    })),
+    {
+      name: 'N+1 Single Host Failure per Cluster',
+      failedHostsPerCluster: wizardState.clusters.reduce((acc, c) => {
+        acc[c.id] = 1;
+        return acc;
+      }, {} as Record<string, number>)
+    },
+    wizardState.clusters.reduce((acc, c) => {
+      acc[c.id] = {
+        vcpu: Math.round(c.hostCount * c.sockets * c.coresPerSocket * 1.5),
+        ramGB: Math.round(c.hostCount * c.ramGB * 0.75),
+        storageTB: Math.round(c.hostCount * c.storageTB * 0.65)
+      };
+      return acc;
+    }, {} as Record<string, { vcpu: number; ramGB: number; storageTB: number }>)
+  );
+
+  const sddcPlatformKey =
+    wizardState.targetPlatform === 'avs-gen1' || wizardState.targetPlatform === 'avs-gen2'
+      ? 'AVS'
+      : wizardState.targetPlatform === 'gcve'
+      ? 'GCVE'
+      : wizardState.targetPlatform === 'vmc-aws'
+      ? 'VMC'
+      : 'NC2';
+
+  const sddcCidrValid = validateSddcPlatformCidr(
+    wizardState.sddcMgmtCidr,
+    sddcPlatformKey,
+    wizardState.targetNodeCount
+  ).isValid;
+
+  const isCrossTierCompatible = evaluateCrossTierCompatibility({
+    sourcePlatform: wizardState.sourcePlatform,
+    targetPlatform: wizardState.targetPlatform,
+    storageTierId: wizardState.decoupledStorageEnabled && wizardState.decoupledStorageProvider
+      ? STORAGE_ATTACHMENT_CATALOGUE.find((s) => s.name === wizardState.decoupledStorageProvider)?.id
+      : undefined,
+    drEngineId: wizardState.drEnabled
+      ? DR_ENGINE_CATALOGUE.find((d) => d.name === wizardState.drConfig.engine)?.id
+      : undefined
+  }).isCompatible;
 
   return (
     <div className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-10">
