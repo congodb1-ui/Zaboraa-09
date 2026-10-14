@@ -16,7 +16,6 @@ export default async function handler(req, res) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-    console.error('GEMINI_API_KEY is not configured.');
     return res.status(500).json({
       success: false,
       error: 'Image generation is not configured.',
@@ -44,7 +43,7 @@ export default async function handler(req, res) {
 
     const targetPrompt =
       prompt?.trim() ||
-      'Create a detailed 3D isometric enterprise cloud architecture blueprint. Use a professional enterprise architecture diagram style, clearly organized components, precise network connections, readable labels, and a 16:9 landscape composition.';
+      'Create a detailed 3D isometric enterprise cloud architecture blueprint with clearly organized components, precise network connections, readable labels, and a 16:9 landscape composition.';
 
     const response = await ai.models.generateContent({
       model: MODEL,
@@ -67,14 +66,7 @@ export default async function handler(req, res) {
     )?.inlineData;
 
     if (!generatedImage?.data) {
-      console.error('Image generation returned no image data.', {
-        model: MODEL,
-        finishReasons: response.candidates?.map(
-          (candidate) => candidate.finishReason
-        ),
-        responseText: response.text?.slice(0, 500),
-      });
-
+      console.error('No image returned by model:', response.text);
       return res.status(502).json({
         success: false,
         error: 'The model did not return an image. Please try again.',
@@ -90,12 +82,7 @@ export default async function handler(req, res) {
       prompt: targetPrompt,
     });
   } catch (err) {
-    console.error('Blueprint generation failed:', {
-      message: err?.message,
-      status: err?.status || err?.statusCode,
-      code: err?.code,
-      details: err?.details,
-    });
+    console.error('Blueprint generation failed:', err);
 
     return res.status(502).json({
       success: false,
@@ -104,4 +91,3 @@ export default async function handler(req, res) {
     });
   }
 }
-```
