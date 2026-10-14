@@ -12,7 +12,14 @@ const FALLBACK_URL =
   '/assets/images/blueprint_3d_isometric_1791610246387.jpg';
 
 async function generateBlueprint(apiKey: string, prompt: string) {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   const response = await ai.models.generateContent({
     model: MODEL,

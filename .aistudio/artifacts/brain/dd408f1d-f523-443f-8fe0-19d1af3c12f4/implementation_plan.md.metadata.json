@@ -1,0 +1,6 @@
+{
+  "summary": "Comprehensive UI refactoring plan for DesignGeneratorPage: transforms the interface into a sleek 4-step wizard (Scope & Source, Transit & Routing, Security & WAF, Target SDDC & DR), strips out the interactive mouse-drag canvas, enhances the static 4K vector blueprint and export engines to display all enterprise configuration parameters, introduces an inline expander editor for dynamic environments, and consolidates the Final Action Center for 3D generation, saving, and exports.",
+  "updatedAt": "2026-10-14T07:24:04.560482966Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

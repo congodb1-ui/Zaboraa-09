@@ -2,14 +2,15 @@ import React from 'react';
 import {
   Layers,
   Network,
+  Shield,
   Cloud,
-  ShieldCheck,
   ChevronRight,
   ChevronLeft,
   Sparkles,
   Zap,
   Columns,
-  Maximize2
+  Maximize2,
+  FileText
 } from 'lucide-react';
 import { WizardState } from '../../types/wizardStateAdapter';
 
@@ -27,8 +28,8 @@ interface WizardStepTabsProps {
   onSelectStep: (step: number) => void;
   wizardState: WizardState;
   onApplyTemplate: (template: IndustryTemplatePreset) => void;
-  layoutMode: 'split' | 'form-only' | 'canvas-only';
-  onToggleLayoutMode: (mode: 'split' | 'form-only' | 'canvas-only') => void;
+  layoutMode: 'split' | 'form-only' | 'canvas-only' | 'preview';
+  onToggleLayoutMode: (mode: 'split' | 'form-only' | 'canvas-only' | 'preview') => void;
   isCidrValid: boolean;
   isCompatibilityValid: boolean;
 }
@@ -226,24 +227,24 @@ export const WizardStepTabs: React.FC<WizardStepTabsProps> = ({
     },
     {
       step: 2,
-      title: 'Transit & Security',
-      subtitle: `${wizardState.firewallMode.toUpperCase()} · ${wizardState.connectivityCarrier.split(' ')[0]}`,
+      title: 'Transit & Routing',
+      subtitle: `${wizardState.landingZonePattern.split(' ')[0]} · ${wizardState.connectivityCarrier.split(' ')[0]}`,
       icon: Network,
       isComplete: wizardState.selectedPublicProviders.length > 0
     },
     {
       step: 3,
-      title: 'Target Platform',
-      subtitle: `${wizardState.targetPlatform.toUpperCase()} (${wizardState.targetNodeCount}x ${wizardState.targetNodeSku})`,
-      icon: Cloud,
-      isComplete: isCidrValid && isCompatibilityValid
+      title: 'Security & WAF',
+      subtitle: `${wizardState.firewallMode.toUpperCase()} · ${wizardState.firewallProvider.split(' ')[0]}`,
+      icon: Shield,
+      isComplete: Boolean(wizardState.firewallMode && wizardState.firewallProvider)
     },
     {
       step: 4,
-      title: 'DR & Generation',
-      subtitle: wizardState.drEnabled ? `${wizardState.drConfig.engine.split(' ')[0]} (${wizardState.drConfig.rpoMinutes}m)` : 'Single Site (DR Off)',
-      icon: ShieldCheck,
-      isComplete: true
+      title: 'Target SDDC & DR',
+      subtitle: `${wizardState.targetPlatform.toUpperCase()} (${wizardState.targetNodeCount}x ${wizardState.targetNodeSku})`,
+      icon: Cloud,
+      isComplete: isCidrValid && isCompatibilityValid
     }
   ];
 
@@ -262,45 +263,33 @@ export const WizardStepTabs: React.FC<WizardStepTabsProps> = ({
             </span>
           </div>
 
-          {/* Viewport Split Mode Switcher */}
+          {/* View Mode Switcher */}
           <div className="flex items-center gap-1.5 self-end sm:self-auto bg-slate-950 p-1 rounded-xl border border-slate-800">
             <button
               type="button"
-              onClick={() => onToggleLayoutMode('split')}
-              title="Responsive Split View: Form on Left, Live Canvas on Right"
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                layoutMode === 'split'
-                  ? 'bg-cyan-500 text-slate-950 shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Columns className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Split View</span>
-            </button>
-            <button
-              type="button"
               onClick={() => onToggleLayoutMode('form-only')}
-              title="Maximize Configuration Form"
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                layoutMode === 'form-only'
-                  ? 'bg-cyan-500 text-slate-950 shadow-sm'
+              title="Interactive 4-Step Architecture Configuration Wizard"
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                layoutMode !== 'preview'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm font-bold'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <span>Form Only</span>
+              <FileText className="w-3.5 h-3.5" />
+              <span>4-Step Wizard</span>
             </button>
             <button
               type="button"
-              onClick={() => onToggleLayoutMode('canvas-only')}
-              title="Maximize Architecture Canvas"
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                layoutMode === 'canvas-only'
-                  ? 'bg-cyan-500 text-slate-950 shadow-sm'
+              onClick={() => onToggleLayoutMode('preview')}
+              title="Full-Resolution Static 4K Vector Blueprint Preview"
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                layoutMode === 'preview'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm font-bold'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <Maximize2 className="w-3.5 h-3.5" />
-              <span>Canvas Only</span>
+              <span>4K Blueprint View</span>
             </button>
           </div>
         </div>
@@ -334,14 +323,17 @@ export const WizardStepTabs: React.FC<WizardStepTabsProps> = ({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
         {steps.map((s) => {
           const Icon = s.icon;
-          const isActive = currentStep === s.step;
+          const isActive = currentStep === s.step && layoutMode !== 'preview';
           const isPassed = currentStep > s.step;
 
           return (
             <button
               key={s.step}
               type="button"
-              onClick={() => onSelectStep(s.step)}
+              onClick={() => {
+                onToggleLayoutMode('form-only');
+                onSelectStep(s.step);
+              }}
               className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer relative overflow-hidden flex flex-col justify-between ${
                 isActive
                   ? 'bg-slate-900 border-cyan-500 shadow-lg shadow-cyan-500/10 ring-1 ring-cyan-500/50'
@@ -384,7 +376,7 @@ export const WizardStepTabs: React.FC<WizardStepTabsProps> = ({
                       : 'bg-amber-950/80 text-amber-300 border-amber-800'
                   }`}
                 >
-                  {s.isComplete ? 'READY' : 'REQUIRED'}
+                  {s.isComplete ? 'READY' : 'CONFIG'}
                 </span>
               </div>
 

@@ -103,9 +103,10 @@ import {
 } from '../../types/wizardStateAdapter';
 import { WizardStepTabs, IndustryTemplatePreset } from '../../components/wizard/WizardStepTabs';
 import { Step1ScopeAndSource } from '../../components/wizard/Step1ScopeAndSource';
-import { Step2TransitAndSecurity } from '../../components/wizard/Step2TransitAndSecurity';
-import { Step3TargetPlatform } from '../../components/wizard/Step3TargetPlatform';
-import { Step4DisasterRecovery } from '../../components/wizard/Step4DisasterRecovery';
+import { Step2TransitAndRouting } from '../../components/wizard/Step2TransitAndRouting';
+import { Step3SecurityAndWAF } from '../../components/wizard/Step3SecurityAndWAF';
+import { Step4TargetAndDR } from '../../components/wizard/Step4TargetAndDR';
+import { Static4KBlueprintPreview } from '../../components/wizard/Static4KBlueprintPreview';
 import { LiveArchitectureSplitView } from '../../components/wizard/LiveArchitectureSplitView';
 
 interface VlanSubsegment {
@@ -162,12 +163,27 @@ export function buildTrackVisualSpec(
     drStrategy: string;
     externalStorageName: string;
     decoupledStorageTB: number;
+    footprintScope?: string;
+    sourcePlatform?: string;
+    vcfVersion?: string;
+    vSphereVersion?: string;
+    nsxVersion?: string;
+    ariaSuite?: string[];
+    nutanixAosVersion?: string;
+    hardwareVendor?: string;
+    hardwareSku?: string;
+    firewallMode?: string;
+    dualLayerInspectionFlow?: string;
+    targetPlatform?: string;
+    targetNodeSku?: string;
+    targetNodeCount?: number;
+    sddcMgmtCidr?: string;
   }
 ): TrackVisualSpec {
   const src = p.sourceEnv || {
     name: 'Primary Datacenter',
     hostCount: 16,
-    nodeSku: 'Enterprise Node',
+    nodeSku: p.hardwareSku ? p.hardwareSku.split(' ')[0] : 'Enterprise Node',
     totalVcpu: 512,
     totalRamGB: 2048,
     storageTB: 200,
@@ -176,12 +192,12 @@ export function buildTrackVisualSpec(
   };
   const tgt = p.targetEnv || {
     name: 'Target Cloud / DR',
-    hostCount: 4,
-    nodeSku: 'Cloud BareMetal',
-    totalVcpu: 144,
-    totalRamGB: 576,
-    storageTB: 60,
-    cidrBlock: '10.240.0.0/22',
+    hostCount: p.targetNodeCount || 4,
+    nodeSku: p.targetNodeSku ? p.targetNodeSku.split(' ')[0] : 'Cloud BareMetal',
+    totalVcpu: (p.targetNodeCount || 4) * 36,
+    totalRamGB: (p.targetNodeCount || 4) * 576,
+    storageTB: p.decoupledStorageTB || 60,
+    cidrBlock: p.sddcMgmtCidr || '10.240.0.0/22',
     region: 'Target Cloud'
   };
   const rpoText = p.drRpoMinutes === 0 ? '0-min Sync (Zero Data Loss)' : `${p.drRpoMinutes}-min RPO`;
@@ -1059,16 +1075,11 @@ export const DesignGeneratorPage: React.FC = () => {
   );
   const [importedLegacyContext, setImportedLegacyContext] = useState<ImportedLegacyContext>({});
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
-  const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'nutanix' | 'sddc' | 'native' | 'migration'>('all');
-  const [canvasMode, setCanvasMode] = useState<'interactive' | 'static-vector'>('interactive');
 
   // 4-Step Enterprise Wizard Navigation & Viewport Layout State
   const [currentStep, setCurrentStep] = useState<number>(1);
-  const [layoutMode, setLayoutMode] = useState<'split' | 'form-only' | 'canvas-only'>('split');
+  const [layoutMode, setLayoutMode] = useState<'split' | 'form-only' | 'canvas-only' | 'preview'>('form-only');
   const [wizardState, setWizardState] = useState<WizardState>(createDefaultWizardState);
-
-  // Step 3 Tabbed Inspector State
-  const [step3ActiveTab, setStep3ActiveTab] = useState<'topology' | 'networking' | 'dr'>('topology');
 
   // Guardrail Modals for Template Switch & Cascade Deletion Protection
   const [showTemplateSwitchModal, setShowTemplateSwitchModal] = useState<boolean>(false);
@@ -1076,9 +1087,7 @@ export const DesignGeneratorPage: React.FC = () => {
   const [showDeleteEnvModal, setShowDeleteEnvModal] = useState<boolean>(false);
   const [pendingDeleteEnvId, setPendingDeleteEnvId] = useState<string | null>(null);
 
-  // Interactive Canvas Interconnect & Inspector States
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
+  // Interconnect Modal States
   const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
   const [linkModalSourceId, setLinkModalSourceId] = useState<string>('');
   const [linkModalTargetId, setLinkModalTargetId] = useState<string>('');
@@ -1087,10 +1096,6 @@ export const DesignGeneratorPage: React.FC = () => {
   const [linkRedundant, setLinkRedundant] = useState<boolean>(true);
   const [linkNotes, setLinkNotes] = useState<string>('');
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
-
-  // Mouse Dragging States
-  const [isDraggingNodeId, setIsDraggingNodeId] = useState<string | null>(null);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const [conflictsResolvedList, setConflictsResolvedList] = useState<string[]>([]);
   const [showAddEnvModal, setShowAddEnvModal] = useState<boolean>(false);
@@ -1431,8 +1436,6 @@ export const DesignGeneratorPage: React.FC = () => {
     const newLinks = getDefaultInterconnectLinksForTemplate(template);
     setTopologyEnvironments(newEnvs);
     setInterconnectLinks(newLinks);
-    setSelectedNodeId(null);
-    setConnectingSourceId(null);
 
     if (template === 'nutanix-onprem') {
       setCloudPlatform('Azure VMware Solution');
@@ -1628,52 +1631,6 @@ export const DesignGeneratorPage: React.FC = () => {
     if (topologyEnvironments.length <= 1) return;
     setTopologyEnvironments(prev => prev.filter(e => e.id !== idToRemove));
     setInterconnectLinks(prev => prev.filter(l => l.sourceId !== idToRemove && l.targetId !== idToRemove));
-    if (selectedNodeId === idToRemove) setSelectedNodeId(null);
-  };
-
-  // Interactive Canvas Mouse Dragging & Coordinate Persistence
-  const handleNodeMouseDown = (e: React.MouseEvent, node: EnvironmentNode) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('button') || target.closest('input') || target.closest('select')) return;
-    setIsDraggingNodeId(node.id);
-    const currX = node.x ?? 80;
-    const currY = node.y ?? 120;
-    setDragOffset({ x: e.clientX - currX, y: e.clientY - currY });
-  };
-
-  const handleCanvasMouseMove = (e: React.MouseEvent) => {
-    if (!isDraggingNodeId) return;
-    const newX = Math.max(20, Math.min(1000, e.clientX - dragOffset.x));
-    const newY = Math.max(40, Math.min(520, e.clientY - dragOffset.y));
-    setTopologyEnvironments(prev =>
-      prev.map(n => (n.id === isDraggingNodeId ? { ...n, x: newX, y: newY } : n))
-    );
-  };
-
-  const handleCanvasMouseUp = () => {
-    setIsDraggingNodeId(null);
-  };
-
-  // Interactive Click-to-Connect Interconnect Links
-  const handleStartConnect = (sourceId: string) => {
-    if (connectingSourceId === sourceId) {
-      setConnectingSourceId(null);
-    } else {
-      setConnectingSourceId(sourceId);
-    }
-  };
-
-  const handleFinishConnect = (targetId: string) => {
-    if (!connectingSourceId || connectingSourceId === targetId) return;
-    setLinkModalSourceId(connectingSourceId);
-    setLinkModalTargetId(targetId);
-    setEditingLinkId(null);
-    setLinkProtocol('ExpressRoute FastPath');
-    setLinkBandwidth(10);
-    setLinkRedundant(true);
-    setLinkNotes('');
-    setShowLinkModal(true);
-    setConnectingSourceId(null);
   };
 
   const handleOpenEditLink = (link: InterconnectLink) => {
@@ -1846,7 +1803,22 @@ export const DesignGeneratorPage: React.FC = () => {
       drRtoMinutes,
       drStrategy,
       externalStorageName,
-      decoupledStorageTB
+      decoupledStorageTB,
+      footprintScope: wizardState.footprintScope,
+      sourcePlatform: wizardState.sourcePlatform,
+      vcfVersion: wizardState.sourceHypervisorConfig?.vcfVersion,
+      vSphereVersion: wizardState.sourceHypervisorConfig?.vSphereVersion,
+      nsxVersion: wizardState.sourceHypervisorConfig?.nsxVersion,
+      ariaSuite: wizardState.sourceHypervisorConfig?.ariaSuite,
+      nutanixAosVersion: wizardState.sourceHypervisorConfig?.nutanixAosVersion,
+      hardwareVendor: wizardState.hardwareVendor,
+      hardwareSku: wizardState.hardwareSku,
+      firewallMode: wizardState.firewallMode,
+      dualLayerInspectionFlow: wizardState.dualLayerInspectionFlow,
+      targetPlatform: wizardState.targetPlatform,
+      targetNodeSku: wizardState.targetNodeSku,
+      targetNodeCount: wizardState.targetNodeCount,
+      sddcMgmtCidr: wizardState.sddcMgmtCidr
     });
 
     // 2. Blueprint Title Header Box
@@ -2256,6 +2228,58 @@ export const DesignGeneratorPage: React.FC = () => {
       : undefined
   }).isCompatible;
 
+  const vectorSpec = useMemo(() => {
+    return buildTrackVisualSpec(activeTemplate, {
+      customerName,
+      sourceEnv: topologyMetrics.primarySource,
+      transitEnv: topologyMetrics.primaryTransit,
+      targetEnv: topologyMetrics.primaryTarget,
+      totalVMs: topologyMetrics.totalVMs,
+      interconnectLinks,
+      connectivity,
+      landingZone,
+      nvaFirewall,
+      wafSolution,
+      drEngine,
+      drRpoMinutes,
+      drRtoMinutes,
+      drStrategy,
+      externalStorageName,
+      decoupledStorageTB,
+      footprintScope: wizardState.footprintScope,
+      sourcePlatform: wizardState.sourcePlatform,
+      vcfVersion: wizardState.sourceHypervisorConfig?.vcfVersion,
+      vSphereVersion: wizardState.sourceHypervisorConfig?.vSphereVersion,
+      nsxVersion: wizardState.sourceHypervisorConfig?.nsxVersion,
+      ariaSuite: wizardState.sourceHypervisorConfig?.ariaSuite,
+      nutanixAosVersion: wizardState.sourceHypervisorConfig?.nutanixAosVersion,
+      hardwareVendor: wizardState.hardwareVendor,
+      hardwareSku: wizardState.hardwareSku,
+      firewallMode: wizardState.firewallMode,
+      dualLayerInspectionFlow: wizardState.dualLayerInspectionFlow,
+      targetPlatform: wizardState.targetPlatform,
+      targetNodeSku: wizardState.targetNodeSku,
+      targetNodeCount: wizardState.targetNodeCount,
+      sddcMgmtCidr: wizardState.sddcMgmtCidr
+    });
+  }, [
+    activeTemplate,
+    customerName,
+    topologyMetrics,
+    interconnectLinks,
+    connectivity,
+    landingZone,
+    nvaFirewall,
+    wafSolution,
+    drEngine,
+    drRpoMinutes,
+    drRtoMinutes,
+    drStrategy,
+    externalStorageName,
+    decoupledStorageTB,
+    wizardState
+  ]);
+
   return (
     <div className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto space-y-10">
       {/* Page Header */}
@@ -2279,14 +2303,24 @@ export const DesignGeneratorPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Explicit Save Blueprint (Strict Legacy Writeback Boundary) */}
+            {/* Primary AI Generation Trigger Button */}
+            <button
+              onClick={() => setShowPreFlightModal(true)}
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 cursor-pointer transition-all hover:scale-[1.02]"
+              title="Generate 3D Isometric Architecture Diagram with Gemini AI"
+            >
+              <Sparkles className="w-4 h-4 fill-slate-950" />
+              <span>Generate 3D Blueprint</span>
+            </button>
+
+            {/* Save Design */}
             <button
               onClick={handlePersistLegacyState}
               className="px-3.5 py-2.5 rounded-xl bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-300 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow transition-all hover:scale-[1.02]"
-              title="Save current blueprint state and synchronize legacy localStorage non-destructively"
+              title="Save current architecture design state and synchronize storage"
             >
               <Save className="w-4 h-4 text-cyan-400" />
-              <span>Save Blueprint</span>
+              <span>Save Design</span>
             </button>
 
             {/* Export Complete Blueprint JSON */}
@@ -2296,35 +2330,10 @@ export const DesignGeneratorPage: React.FC = () => {
               title="Export complete multi-cloud architecture topology model as JSON"
             >
               <FileDown className="w-4 h-4 text-cyan-400" />
-              <span>Export Blueprint (JSON)</span>
+              <span>Export JSON</span>
             </button>
 
-            {/* Primary AI Generation Trigger Button */}
-            <button
-              onClick={() => setShowPreFlightModal(true)}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-500/20 cursor-pointer transition-all hover:scale-[1.02]"
-            >
-              <Sparkles className="w-4 h-4 fill-slate-950" />
-              <span>Review & Generate 3D Blueprint</span>
-            </button>
-
-            <button
-              onClick={() => handleExport4K('png')}
-              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
-              title="Download high-resolution 4K canvas without storage write"
-            >
-              <Download className="w-4 h-4 text-cyan-400" />
-              <span>Export 4K Canvas</span>
-            </button>
-
-            <button
-              onClick={() => setShowDossierModal(true)}
-              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
-            >
-              <Printer className="w-4 h-4 text-emerald-400" />
-              <span>Executive Dossier</span>
-            </button>
-
+            {/* Export BOM Excel */}
             <button
               onClick={handleExportBOMExcel}
               className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
@@ -2332,6 +2341,25 @@ export const DesignGeneratorPage: React.FC = () => {
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
               <span>Export BOM (.xlsx)</span>
+            </button>
+
+            {/* Export 4K Canvas */}
+            <button
+              onClick={() => handleExport4K('png')}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
+              title="Download high-resolution 4K canvas vector render"
+            >
+              <Download className="w-4 h-4 text-cyan-400" />
+              <span>Export 4K Canvas</span>
+            </button>
+
+            {/* Executive Dossier */}
+            <button
+              onClick={() => setShowDossierModal(true)}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
+            >
+              <Printer className="w-4 h-4 text-emerald-400" />
+              <span>Executive Dossier</span>
             </button>
           </div>
         </div>
@@ -2407,472 +2435,192 @@ export const DesignGeneratorPage: React.FC = () => {
         </div>
       )}
 
-      {/* Architecture Design Track Selector (9 Enterprise Tracks with Category Filters) */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-5 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-cyan-400" />
-              <span>Step 1: Enterprise Architecture Design Track (9 Cloud Tracks)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Select foundational multi-cloud, hyperscaler SDDC, or hyperconverged migration pattern.
-            </p>
-          </div>
-          <span className="text-xs font-mono text-cyan-400 font-bold px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/30">
-            Active Track: {activeTemplate.toUpperCase()}
-          </span>
+      {/* 4-Step Enterprise Wizard Navigation Tabs with Industry Presets & Layout Toggles */}
+      <WizardStepTabs
+        currentStep={currentStep}
+        onSelectStep={setCurrentStep}
+        wizardState={wizardState}
+        onApplyTemplate={handleApplyIndustryTemplate}
+        layoutMode={layoutMode}
+        onToggleLayoutMode={setLayoutMode}
+        isCidrValid={sddcCidrValid}
+        isCompatibilityValid={isCrossTierCompatible}
+      />
+
+      {/* Viewport Content Router: Dedicated 4K Preview / Split View / Form-Only 4-Step Flow */}
+      {layoutMode === 'preview' ? (
+        <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl animate-in fade-in">
+          <Static4KBlueprintPreview
+            spec={vectorSpec}
+            architectName={architectName}
+            projectDate={projectDate}
+            activeTemplate={activeTemplate}
+            drEngine={drEngine}
+            drRpoMinutes={drRpoMinutes}
+            onExport4K={handleExport4K}
+            showControls={true}
+          />
         </div>
-
-        {/* Category Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-2 pb-1">
-          {[
-            { id: 'all', label: 'All Tracks (9)' },
-            { id: 'nutanix', label: 'Nutanix & Hybrid (3)' },
-            { id: 'sddc', label: 'Hyperscaler SDDC (3)' },
-            { id: 'native', label: 'Cloud Native (2)' },
-            { id: 'migration', label: 'Migration (1)' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveCategoryTab(tab.id as any)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeCategoryTab === tab.id
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20'
-                  : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* 9 Tracks Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {/* Track 1: Nutanix On-Prem */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('nutanix-onprem')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'nutanix-onprem'
-                  ? 'bg-emerald-950/40 border-emerald-500 shadow-lg shadow-emerald-950/50 ring-1 ring-emerald-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-emerald-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <NutanixPrismIcon className="w-6 h-6 text-emerald-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                    AOS / AHV
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Nutanix On-Premises</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  NCI clusters, AHV virtualization, Prism Central management, and Flow microsegmentation.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-emerald-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Primary Datacenter</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
+      ) : layoutMode === 'split' ? (
+        <LiveArchitectureSplitView
+          layoutMode="split"
+          leftPanel={
+            <div className="space-y-6">
+              {currentStep === 1 && (
+                <Step1ScopeAndSource
+                  wizardState={wizardState}
+                  onChange={handleWizardStateChange}
+                  onNext={() => setCurrentStep(2)}
+                />
+              )}
+              {currentStep === 2 && (
+                <Step2TransitAndRouting
+                  wizardState={wizardState}
+                  onChange={handleWizardStateChange}
+                  environments={topologyEnvironments}
+                  onUpdateEnvironment={(id, updates) =>
+                    setTopologyEnvironments((prev) =>
+                      prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
+                    )
+                  }
+                  onRemoveEnvironment={(id) => {
+                    setPendingDeleteEnvId(id);
+                    setShowDeleteEnvModal(true);
+                  }}
+                  onOpenAddEnvModal={() => setShowAddEnvModal(true)}
+                  onNext={() => setCurrentStep(3)}
+                  onPrev={() => setCurrentStep(1)}
+                />
+              )}
+              {currentStep === 3 && (
+                <Step3SecurityAndWAF
+                  wizardState={wizardState}
+                  onChange={handleWizardStateChange}
+                  onNext={() => setCurrentStep(4)}
+                  onPrev={() => setCurrentStep(2)}
+                />
+              )}
+              {currentStep === 4 && (
+                <Step4TargetAndDR
+                  wizardState={wizardState}
+                  onChange={handleWizardStateChange}
+                  onPrev={() => setCurrentStep(3)}
+                  onGenerateAI={() => setShowPreFlightModal(true)}
+                  onSaveBlueprint={handlePersistLegacyState}
+                  onExportJson={handleExportBlueprintJSON}
+                  onExportExcel={handleExportBOMExcel}
+                  onExport4K={() => handleExport4K('png')}
+                  onOpenDossier={() => setShowDossierModal(true)}
+                />
+              )}
+            </div>
+          }
+          rightPanel={
+            <Static4KBlueprintPreview
+              spec={vectorSpec}
+              architectName={architectName}
+              projectDate={projectDate}
+              activeTemplate={activeTemplate}
+              drEngine={drEngine}
+              drRpoMinutes={drRpoMinutes}
+              onExport4K={handleExport4K}
+              showControls={true}
+            />
+          }
+          metrics={{
+            totalHosts: topologyMetrics.totalHosts,
+            totalCores: topologyMetrics.totalCores,
+            totalLogicalThreads: topologyMetrics.totalLogicalThreads,
+            totalUsableRamGB: topologyMetrics.totalUsableRamGB,
+            totalUsableStorageTB: topologyMetrics.totalUsableStorageTB,
+            targetSku: wizardState.targetNodeSku,
+            targetNodes: wizardState.targetNodeCount,
+            drSla: `${drRpoMinutes}m RPO / ${drRtoMinutes}m RTO`,
+            n1Viable: topologyMetrics.n1Viable,
+            platformName: cloudPlatform
+          }}
+        />
+      ) : (
+        /* Standard Form-Only 4-Step Wizard Flow */
+        <div className="space-y-6">
+          {currentStep === 1 && (
+            <Step1ScopeAndSource
+              wizardState={wizardState}
+              onChange={handleWizardStateChange}
+              onNext={() => setCurrentStep(2)}
+            />
           )}
 
-          {/* Track 2: Nutanix On-Prem to NC2 on Azure */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('nutanix-to-nc2')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'nutanix-to-nc2'
-                  ? 'bg-cyan-950/40 border-cyan-500 shadow-lg shadow-cyan-950/50 ring-1 ring-cyan-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-cyan-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <NutanixAhvIcon className="w-5 h-5 text-emerald-400" />
-                    <span className="text-slate-500 text-xs">→</span>
-                    <AzureVirtualWanIcon className="w-5 h-5 text-cyan-400" />
-                  </div>
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                    NC2 Azure
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Nutanix to NC2 on Azure</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  BareMetal Azure nodes with native Azure vNet integration, Nutanix Move replication, and DR.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-cyan-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Hybrid Cloud Extension</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
+          {currentStep === 2 && (
+            <Step2TransitAndRouting
+              wizardState={wizardState}
+              onChange={handleWizardStateChange}
+              environments={topologyEnvironments}
+              onUpdateEnvironment={(id, updates) =>
+                setTopologyEnvironments((prev) =>
+                  prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
+                )
+              }
+              onRemoveEnvironment={(id) => {
+                setPendingDeleteEnvId(id);
+                setShowDeleteEnvModal(true);
+              }}
+              onOpenAddEnvModal={() => setShowAddEnvModal(true)}
+              onNext={() => setCurrentStep(3)}
+              onPrev={() => setCurrentStep(1)}
+            />
           )}
 
-          {/* Track 3: VMware to Nutanix NC2 Assessment */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'migration') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('vmware-to-nc2')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'vmware-to-nc2'
-                  ? 'bg-indigo-950/40 border-indigo-500 shadow-lg shadow-indigo-950/50 ring-1 ring-indigo-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-indigo-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <VmwareVcenterIcon className="w-5 h-5 text-sky-400" />
-                    <span className="text-slate-500 text-xs">→</span>
-                    <NutanixMoveIcon className="w-5 h-5 text-emerald-400" />
-                  </div>
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
-                    Migration
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">VMware to NC2 Assessment</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  Cross-hypervisor migration assessment, Nutanix Move VirtIO driver injection, and wave cutover.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-indigo-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Move Assessment</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
+          {currentStep === 3 && (
+            <Step3SecurityAndWAF
+              wizardState={wizardState}
+              onChange={handleWizardStateChange}
+              onNext={() => setCurrentStep(4)}
+              onPrev={() => setCurrentStep(2)}
+            />
           )}
 
-          {/* Track 4: Azure VMware Solution (AVS) */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('avs')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'avs'
-                  ? 'bg-sky-950/40 border-sky-500 shadow-lg shadow-sky-950/50 ring-1 ring-sky-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-sky-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <AzureExpressRouteIcon className="w-6 h-6 text-sky-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
-                    AVS SDDC
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Azure VMware Solution</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  ExpressRoute FastPath, Tier-0 NSX-T gateways, decoupled ANF storage, and Azure native hub.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-sky-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Dedicated SDDC</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-
-          {/* Track 5: VMware Cloud on AWS (VMC) */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('vmc-aws')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'vmc-aws'
-                  ? 'bg-amber-950/40 border-amber-500 shadow-lg shadow-amber-950/50 ring-1 ring-amber-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-amber-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <AwsTransitGatewayIcon className="w-6 h-6 text-amber-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
-                    AWS VMC
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">VMware Cloud on AWS</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  BareMetal i4i.metal SDDC, high-speed Connected VPC ENI, Transit Gateway, and FSx ONTAP storage.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-amber-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>AWS Dedicated SDDC</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-
-          {/* Track 6: Google Cloud VMware Engine (GCVE) */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('gcve')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'gcve'
-                  ? 'bg-blue-950/40 border-blue-500 shadow-lg shadow-blue-950/50 ring-1 ring-blue-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-blue-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <GcpInterconnectIcon className="w-6 h-6 text-blue-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
-                    GCP GCVE
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Google Cloud VMware Engine</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  ve1-standard-72 nodes with 100 Gbps dedicated interconnect, NetApp Volumes (GCNV), and Cloud Armor.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-blue-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>GCP Dedicated SDDC</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-
-          {/* Track 7: AWS Native Enterprise VPC Hub */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'native') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('aws-native')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'aws-native'
-                  ? 'bg-amber-950/40 border-amber-500 shadow-lg shadow-amber-950/50 ring-1 ring-amber-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-amber-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <AwsTransitGatewayIcon className="w-6 h-6 text-amber-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
-                    AWS Native
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">AWS Native Enterprise VPC Hub</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  Direct Connect gateway, Transit Gateway security inspection, Amazon EKS, Aurora, and S3 tiers.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-amber-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Cloud Native VPC</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-
-          {/* Track 8: Google Cloud Native Hub */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'native') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('gcp-native')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'gcp-native'
-                  ? 'bg-blue-950/40 border-blue-500 shadow-lg shadow-blue-950/50 ring-1 ring-blue-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-blue-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <GcpInterconnectIcon className="w-6 h-6 text-blue-400" />
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
-                    GCP Native
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Google Cloud Native Hub</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  Dedicated Interconnect, Shared VPC host project, GKE enterprise clusters, and BigQuery lakehouse.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-blue-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Cloud Native Mesh</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-
-          {/* Track 9: Multi-Cloud Enterprise Mesh */}
-          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
-            <button
-              type="button"
-              onClick={() => handleSelectTemplate('multi-cloud')}
-              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                activeTemplate === 'multi-cloud'
-                  ? 'bg-purple-950/40 border-purple-500 shadow-lg shadow-purple-950/50 ring-1 ring-purple-500'
-                  : 'bg-slate-950/70 border-slate-800 hover:border-purple-600/50 hover:bg-slate-950'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1">
-                    <AzureVirtualWanIcon className="w-4 h-4 text-sky-400" />
-                    <AwsTransitGatewayIcon className="w-4 h-4 text-amber-400" />
-                    <GcpInterconnectIcon className="w-4 h-4 text-blue-400" />
-                  </div>
-                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
-                    Mesh
-                  </span>
-                </div>
-                <h3 className="text-xs font-bold text-white">Multi-Cloud Enterprise Mesh</h3>
-                <p className="text-[11px] text-slate-400 line-clamp-2">
-                  Arbitrary multi-DC topology spanning On-Prem, Azure, AWS, and GCP with shared identity & DR.
-                </p>
-              </div>
-              <div className="text-[10px] font-mono text-purple-400 flex items-center justify-between pt-1 border-t border-slate-900">
-                <span>Cross-Cloud DR</span>
-                <ChevronRight className="w-3 h-3" />
-              </div>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Dynamic Multi-Environment Builder (Step 2) */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Server className="w-4 h-4 text-cyan-400" />
-              <span>Step 2: Dynamic Multi-Environment Builder ({topologyEnvironments.length} Active Environments)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Configure arbitrary on-premises datacenters, cloud regions, production tiers, and disaster recovery targets.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowAddEnvModal(true)}
-            className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow transition-all cursor-pointer"
-          >
-            <span>+ Add Custom Environment</span>
-          </button>
-        </div>
-
-        {/* Environments Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {topologyEnvironments.map((env, idx) => {
-            const isProd = env.role === 'Production';
-            const isDR = env.role === 'Disaster Recovery';
-            const isShared = env.role === 'Shared Services';
-            const isSecondActive = env.role === 'Secondary Active';
-
-            return (
-              <div
-                key={env.id}
-                className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition space-y-3 relative group"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    {/* Platform Icon Badge */}
-                    <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800">
-                      {env.platform.includes('Nutanix') ? (
-                        <NutanixAhvIcon className="w-5 h-5 text-emerald-400" />
-                      ) : env.platform.includes('Azure') ? (
-                        <AzureVirtualWanIcon className="w-5 h-5 text-sky-400" />
-                      ) : env.platform.includes('AWS') ? (
-                        <AwsTransitGatewayIcon className="w-5 h-5 text-amber-400" />
-                      ) : env.platform.includes('Google') || env.platform.includes('GCP') ? (
-                        <GcpInterconnectIcon className="w-5 h-5 text-blue-400" />
-                      ) : (
-                        <VmwareVcenterIcon className="w-5 h-5 text-indigo-400" />
-                      )}
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-white line-clamp-1">{env.name}</h4>
-                      <p className="text-[11px] text-slate-400">{env.region}</p>
-                    </div>
-                  </div>
-
-                  {/* Role Badge */}
-                  <span
-                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border shrink-0 ${
-                      isProd
-                        ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
-                        : isDR
-                        ? 'bg-amber-950 text-amber-300 border-amber-700'
-                        : isSecondActive
-                        ? 'bg-sky-950 text-sky-300 border-sky-700'
-                        : isShared
-                        ? 'bg-slate-900 text-slate-300 border-slate-700'
-                        : 'bg-purple-950 text-purple-300 border-purple-700'
-                    }`}
-                  >
-                    {env.role}
-                  </span>
-                </div>
-
-                {/* Sizing Details */}
-                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-900 text-[11px] font-mono text-slate-300">
-                  <div>
-                    <span className="text-[10px] text-slate-500 block">HOSTS / SKU</span>
-                    <span className="font-semibold text-white">
-                      {env.hostCount > 0 ? `${env.hostCount}x ${env.nodeSku.split(' ')[0]}` : 'Serverless'}
+          {currentStep === 4 && (
+            <Step4TargetAndDR
+              wizardState={wizardState}
+              onChange={handleWizardStateChange}
+              onPrev={() => setCurrentStep(3)}
+              onGenerateAI={() => setShowPreFlightModal(true)}
+              onSaveBlueprint={handlePersistLegacyState}
+              onExportJson={handleExportBlueprintJSON}
+              onExportExcel={handleExportBOMExcel}
+              onExport4K={() => handleExport4K('png')}
+              onOpenDossier={() => setShowDossierModal(true)}
+              blueprintPreviewNode={
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-mono text-cyan-400 font-bold uppercase tracking-wider">
+                      Static 4K Vector Architecture Preview
                     </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 block">COMPUTE</span>
-                    <span className="font-semibold text-cyan-300">
-                      {env.totalVcpu} vCPU
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 block">STORAGE</span>
-                    <span className="font-semibold text-emerald-300">
-                      {env.storageTB} TiB
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 border-t border-slate-900">
-                  <span className="font-mono text-[10px] text-slate-500">CIDR: {env.cidrBlock}</span>
-                  {topologyEnvironments.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => promptRemoveEnvironment(env.id)}
-                      className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                      onClick={() => setLayoutMode('preview')}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 font-mono underline cursor-pointer"
                     >
-                      Remove
+                      Open Dedicated 4K Vector View
                     </button>
-                  )}
+                  </div>
+                  <Static4KBlueprintPreview
+                    spec={vectorSpec}
+                    architectName={architectName}
+                    projectDate={projectDate}
+                    activeTemplate={activeTemplate}
+                    drEngine={drEngine}
+                    drRpoMinutes={drRpoMinutes}
+                    onExport4K={handleExport4K}
+                    showControls={false}
+                  />
                 </div>
-              </div>
-            );
-          })}
+              }
+            />
+          )}
         </div>
-
-        {/* Platform-Specific Resilience Validation Warning Banner */}
-        {getPlatformResilienceWarnings().length > 0 && (
-          <div className="space-y-2 pt-2">
-            {getPlatformResilienceWarnings().map((w, idx) => (
-              <div
-                key={idx}
-                className={`p-3 rounded-xl border flex items-start gap-2.5 text-xs ${
-                  w.type === 'warning'
-                    ? 'bg-amber-950/30 border-amber-500/40 text-amber-200'
-                    : 'bg-cyan-950/30 border-cyan-500/40 text-cyan-200'
-                }`}
-              >
-                {w.type === 'warning' ? (
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                ) : (
-                  <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-                )}
-                <div className="leading-relaxed">
-                  <strong>Technical Architecture Requirement: </strong>
-                  <span>{w.text}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Add Custom Environment Modal */}
       {showAddEnvModal && (
@@ -2893,7 +2641,6 @@ export const DesignGeneratorPage: React.FC = () => {
             </div>
 
             <div className="space-y-3 text-xs">
-              {/* Environment Name with validation and requirement helper text */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <label className="text-slate-300 font-medium">
@@ -2922,17 +2669,6 @@ export const DesignGeneratorPage: React.FC = () => {
                       : 'border-emerald-500/60 focus:border-emerald-400'
                   }`}
                 />
-                {isEnvNameDuplicate && (
-                  <p className="text-[11px] text-rose-400 flex items-center gap-1 mt-0.5">
-                    <AlertTriangle className="w-3 h-3 shrink-0" />
-                    <span>An environment named &ldquo;{trimmedEnvName}&rdquo; already exists. Please choose a unique name.</span>
-                  </p>
-                )}
-                {isEnvNameEmpty && (
-                  <p className="text-[11px] text-slate-400">
-                    Enter a descriptive identifier (e.g., region, role, or facility name).
-                  </p>
-                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2983,126 +2719,60 @@ export const DesignGeneratorPage: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-300 font-medium">Management CIDR</label>
-                    {isCidrFormatInvalid ? (
-                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid CIDR</span>
-                    ) : trimmedCidr ? (
-                      <span className="text-[11px] text-emerald-400 font-mono">IPv4 Valid</span>
-                    ) : (
-                      <span className="text-[11px] text-slate-400 font-mono">Optional</span>
-                    )}
-                  </div>
+                  <label className="text-slate-300 font-medium">Management CIDR</label>
                   <input
                     type="text"
                     placeholder="10.240.0.0/22"
                     value={newEnvCidr}
                     onChange={e => setNewEnvCidr(e.target.value)}
-                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
-                      isCidrFormatInvalid
-                        ? 'border-rose-500 focus:border-rose-400'
-                        : trimmedCidr
-                        ? 'border-emerald-500/60 focus:border-emerald-400'
-                        : 'border-slate-800 focus:border-cyan-500'
-                    }`}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs font-mono focus:border-cyan-500 focus:outline-none"
                   />
-                  {isCidrFormatInvalid ? (
-                    <p className="text-[11px] text-rose-400">
-                      Enter a valid IPv4 CIDR block (e.g. 10.240.0.0/22 or 172.16.0.0/16, prefix /0 to /32).
-                    </p>
-                  ) : (
-                    <p className="text-[10px] text-slate-400">
-                      Format: x.x.x.x/yy (leave blank if unassigned).
-                    </p>
-                  )}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-300 font-medium">Host / Node Count</label>
-                    {!isHostCountValid && (
-                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid count</span>
-                    )}
-                  </div>
+                  <label className="text-slate-300 font-medium">Host / Node Count</label>
                   <input
                     type="number"
                     min={newEnvPlatform.includes('Native') ? 0 : 1}
                     max={64}
                     value={newEnvHosts}
                     onChange={e => setNewEnvHosts(Number(e.target.value))}
-                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
-                      !isHostCountValid ? 'border-rose-500' : 'border-slate-800 focus:border-cyan-500'
-                    }`}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs font-mono focus:border-cyan-500 focus:outline-none"
                   />
-                  <span className="text-[10px] text-slate-400 block">
-                    {newEnvPlatform.includes('Native')
-                      ? 'Native VPC / VNet services (0 allowed for serverless/managed)'
-                      : 'Physical or baremetal hypervisor nodes (min 1)'}
-                  </span>
                 </div>
                 <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-300 font-medium">Storage Footprint (TB)</label>
-                    {!isStorageValid && (
-                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid TB</span>
-                    )}
-                  </div>
+                  <label className="text-slate-300 font-medium">Storage Footprint (TB)</label>
                   <input
                     type="number"
                     min={1}
                     max={1000}
                     value={newEnvStorageTB}
                     onChange={e => setNewEnvStorageTB(Number(e.target.value))}
-                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
-                      !isStorageValid ? 'border-rose-500' : 'border-slate-800 focus:border-cyan-500'
-                    }`}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs font-mono focus:border-cyan-500 focus:outline-none"
                   />
-                  <span className="text-[10px] text-slate-400 block">
-                    Raw or usable storage allocation (TB)
-                  </span>
                 </div>
               </div>
             </div>
 
-            {/* Validation helper status bar */}
-            {!isAddEnvFormValid && (
-              <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-                <span className="font-semibold text-slate-300 block">Required to add environment:</span>
-                <ul className="list-disc list-inside space-y-0.5 text-[10px]">
-                  {isEnvNameEmpty && <li>Provide an Environment Name</li>}
-                  {isEnvNameDuplicate && <li>Choose an Environment Name that is not already in use</li>}
-                  {isCidrFormatInvalid && <li>Provide a valid IPv4 CIDR (or leave blank)</li>}
-                  {!isHostCountValid && <li>Enter a valid non-negative host count</li>}
-                  {!isStorageValid && <li>Enter a valid positive storage footprint in TB</li>}
-                </ul>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-              <span className="text-[11px] text-slate-400">
-                Newly created environments are added as unlinked zones until connected.
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddEnvModal(false)}
-                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddEnvironment}
-                  disabled={!isAddEnvFormValid}
-                  title={!isAddEnvFormValid ? 'Complete all required fields to add environment' : undefined}
-                  className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-bold shadow cursor-pointer transition flex items-center gap-1.5"
-                >
-                  <Server className="w-3.5 h-3.5" />
-                  <span>Add Environment</span>
-                </button>
-              </div>
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowAddEnvModal(false)}
+                className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddEnvironment}
+                disabled={!isAddEnvFormValid}
+                className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-bold shadow cursor-pointer transition flex items-center gap-1.5"
+              >
+                <Server className="w-3.5 h-3.5" />
+                <span>Add Environment</span>
+              </button>
             </div>
           </div>
         </div>
@@ -3123,7 +2793,7 @@ export const DesignGeneratorPage: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              You have customized node counts, hardware SKUs, or network interconnects in your active topology. Switching to a new architecture track will reset the environment canvas to that track&apos;s baseline topology.
+              You have customized node counts, hardware SKUs, or network interconnects in your active topology. Switching to a new architecture track will reset the environment to that track&apos;s baseline topology.
             </p>
 
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
@@ -3178,21 +2848,8 @@ export const DesignGeneratorPage: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Environment <strong>&quot;{topologyEnvironments.find(e => e.id === pendingDeleteEnvId)?.name}&quot;</strong> is currently connected to other environments. Removing it will automatically sever all attached interconnect links:
+              Environment <strong>&quot;{topologyEnvironments.find(e => e.id === pendingDeleteEnvId)?.name}&quot;</strong> is currently connected to other environments. Removing it will automatically sever all attached interconnect links.
             </p>
-
-            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-2 max-h-36 overflow-y-auto font-mono">
-              {interconnectLinks
-                .filter(l => l.sourceId === pendingDeleteEnvId || l.targetId === pendingDeleteEnvId)
-                .map(l => (
-                  <div key={l.id} className="text-[11px] text-rose-300 flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                    <span>
-                      {topologyEnvironments.find(e => e.id === l.sourceId)?.name} ➔ {topologyEnvironments.find(e => e.id === l.targetId)?.name} ({l.protocol})
-                    </span>
-                  </div>
-                ))}
-            </div>
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
@@ -3222,1295 +2879,6 @@ export const DesignGeneratorPage: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Step 3: Tabbed Sizing & Configuration Inspector (Topology, Networking, DR) */}
-      <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5 shadow-2xl">
-        {/* Step 3 Header & Tab Switcher */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-cyan-400 font-bold uppercase">Step 3: Configuration Inspector</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">
-                Single Source of Truth
-              </span>
-            </div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <span>Workload Sizing, Network Fabric & Disaster Recovery Inspector</span>
-            </h2>
-          </div>
-
-          {/* Three Inspector Tabs */}
-          <div className="flex items-center p-1 bg-slate-950 border border-slate-800 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setStep3ActiveTab('topology')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                step3ActiveTab === 'topology'
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Server className="w-3.5 h-3.5" />
-              <span>Topology & Sizing</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setStep3ActiveTab('networking')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                step3ActiveTab === 'networking'
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Network className="w-3.5 h-3.5" />
-              <span>Network & Subnets</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setStep3ActiveTab('dr')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                step3ActiveTab === 'dr'
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <ShieldAlert className="w-3.5 h-3.5" />
-              <span>DR & Resilience</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Live Rollup Capacity Metrics Banner */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 font-mono text-xs">
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Environments</span>
-            <span className="text-sm font-bold text-cyan-400">{topologyEnvironments.length} Tiers</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Total Hosts</span>
-            <span className="text-sm font-bold text-white">{topologyMetrics.totalHosts} Nodes</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Total Workload</span>
-            <span className="text-sm font-bold text-emerald-400">{topologyMetrics.totalVMs} VMs</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Aggregate vCPU</span>
-            <span className="text-sm font-bold text-white">{topologyMetrics.totalVcpu} Cores</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Aggregate Memory</span>
-            <span className="text-sm font-bold text-white">{topologyMetrics.totalRamGB} GiB</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase block">Usable Storage</span>
-            <span className="text-sm font-bold text-indigo-400">{topologyMetrics.totalStorageTB} TiB</span>
-          </div>
-        </div>
-
-        {/* TAB 1: TOPOLOGY & SIZING INSPECTOR */}
-        {step3ActiveTab === 'topology' && (
-          <div className="space-y-4">
-            {/* Metadata Bar */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs">
-              <div className="space-y-1">
-                <label className="text-slate-400 font-medium text-[11px]">Customer Organization</label>
-                <input
-                  type="text"
-                  value={customerName}
-                  onChange={e => setCustomerName(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 font-semibold focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-slate-400 font-medium text-[11px]">Lead Enterprise Architect</label>
-                <input
-                  type="text"
-                  value={architectName}
-                  onChange={e => setArchitectName(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-slate-400 font-medium text-[11px]">Project Timestamp</label>
-                <input
-                  type="date"
-                  value={projectDate}
-                  onChange={e => setProjectDate(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Environment Cards Grid */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span className="font-semibold text-slate-300">Configured Environment Tiers & Sizing:</span>
-                <span className="font-mono text-[11px]">Editing specs directly updates the authoritative model</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {topologyEnvironments.map(env => {
-                  const skuList = getAvailableSkusForPlatform(env.platform);
-                  return (
-                    <div
-                      key={env.id}
-                      className="p-4 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 transition flex flex-col justify-between space-y-3"
-                    >
-                      {/* Environment Card Header */}
-                      <div className="flex items-start justify-between gap-2 border-b border-slate-800/80 pb-2">
-                        <div className="space-y-0.5">
-                          <input
-                            type="text"
-                            value={env.name}
-                            onChange={e => handleUpdateNodeSpec(env.id, { name: e.target.value })}
-                            className="font-bold text-white text-xs bg-transparent border-b border-transparent hover:border-slate-700 focus:border-cyan-500 focus:outline-none w-full"
-                          />
-                          <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                            <span className="text-cyan-400">{env.platform}</span>
-                            <span className="text-slate-600">·</span>
-                            <span className="text-slate-400 capitalize">{env.tier}</span>
-                          </div>
-                        </div>
-
-                        {topologyEnvironments.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => promptRemoveEnvironment(env.id)}
-                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer transition"
-                            title="Remove environment"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Sizing Controls */}
-                      <div className="space-y-2.5 text-xs">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Host Count</label>
-                            <input
-                              type="number"
-                              min="1"
-                              max="128"
-                              value={env.hostCount}
-                              onChange={e => handleUpdateNodeSpec(env.id, { hostCount: Math.max(1, Number(e.target.value)) })}
-                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-white font-mono font-bold focus:border-cyan-500 focus:outline-none"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Workload VMs</label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="10000"
-                              value={env.vmCount ?? Math.round(env.totalVcpu / 2.5)}
-                              onChange={e => handleUpdateNodeSpec(env.id, { vmCount: Math.max(0, Number(e.target.value)) })}
-                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-emerald-400 font-mono font-bold focus:border-cyan-500 focus:outline-none"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[10px] text-slate-400 uppercase font-mono block">Hardware Node SKU</label>
-                          <select
-                            value={env.nodeSku}
-                            onChange={e => handleUpdateNodeSpec(env.id, { nodeSku: e.target.value })}
-                            className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 text-[11px] font-mono focus:border-cyan-500 focus:outline-none"
-                          >
-                            {skuList.map(sku => (
-                              <option key={sku} value={sku}>
-                                {sku}
-                              </option>
-                            ))}
-                            {!skuList.includes(env.nodeSku) && (
-                              <option value={env.nodeSku}>{env.nodeSku}</option>
-                            )}
-                          </select>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Storage (TB)</label>
-                            <input
-                              type="number"
-                              min="1"
-                              max="2000"
-                              value={env.storageTB}
-                              onChange={e => handleUpdateNodeSpec(env.id, { storageTB: Math.max(1, Number(e.target.value)) })}
-                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Subnet CIDR</label>
-                            <input
-                              type="text"
-                              value={env.cidrBlock}
-                              onChange={e => handleUpdateNodeSpec(env.id, { cidrBlock: e.target.value })}
-                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono text-[11px] focus:border-cyan-500 focus:outline-none"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Capacity Rollup Footer */}
-                      <div className="pt-2 border-t border-slate-900 text-[10px] font-mono text-slate-400 flex items-center justify-between">
-                        <span>Compute: {env.totalVcpu} vCPUs · {env.totalRamGB} GB</span>
-                        <span className="text-slate-500">{env.region}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 2: NETWORK & SUBNETS INSPECTOR */}
-        {step3ActiveTab === 'networking' && (
-          <div className="space-y-5">
-            {/* Global Network & Security Architecture Controls */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs">
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium text-[11px]">Physical Interconnect Carrier</label>
-                <select
-                  value={connectivity}
-                  onChange={e => setConnectivity(e.target.value as any)}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Hybrid (VPN + ExpressRoute / DirectConnect)">Hybrid (VPN + Direct Circuit)</option>
-                  <option value="Direct Circuits with FastPath / Global Reach">Direct Circuits (FastPath / Global Reach)</option>
-                  <option value="VPN Only">IPsec VPN Only</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium text-[11px]">Landing Zone Architecture</label>
-                <select
-                  value={landingZone}
-                  onChange={e => setLandingZone(e.target.value as any)}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Azure Virtual WAN Hub-and-Spoke">Azure Virtual WAN Hub-and-Spoke</option>
-                  <option value="Traditional Hub-and-Spoke with ARS">Traditional Hub-and-Spoke with Route Server</option>
-                  <option value="AWS Transit Gateway Multi-VPC">AWS Transit Gateway Multi-VPC</option>
-                  <option value="GCP Shared VPC Host Project">GCP Shared VPC Host Project</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium text-[11px]">NVA Firewall Architecture</label>
-                <select
-                  value={nvaFirewall}
-                  onChange={e => setNvaFirewall(e.target.value as any)}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Palo Alto Networks VM-Series">Palo Alto Networks VM-Series</option>
-                  <option value="Azure Firewall Premium / Native">Azure Firewall Premium / Native</option>
-                  <option value="Fortinet FortiGate-VM">Fortinet FortiGate-VM</option>
-                  <option value="Check Point CloudGuard">Check Point CloudGuard</option>
-                  <option value="Cisco Secure Firewall">Cisco Secure Firewall</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium text-[11px]">Web Application Firewall (WAF)</label>
-                <select
-                  value={wafSolution}
-                  onChange={e => setWafSolution(e.target.value as any)}
-                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Azure WAF on Application Gateway">Azure WAF on App Gateway</option>
-                  <option value="Cloudflare Magic Transit">Cloudflare Magic Transit</option>
-                  <option value="AWS WAF">AWS WAF</option>
-                  <option value="F5 Distributed Cloud WAF">F5 Distributed Cloud WAF</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Interconnect Links Table */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-300 flex items-center gap-2">
-                  <Network className="w-4 h-4 text-cyan-400" />
-                  <span>Cross-Environment Interconnect Links ({interconnectLinks.length})</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (topologyEnvironments.length >= 2) {
-                      setEditingLinkId(null);
-                      setLinkModalSourceId(topologyEnvironments[0]?.id || '');
-                      setLinkModalTargetId(topologyEnvironments[1]?.id || '');
-                      setShowLinkModal(true);
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow transition"
-                >
-                  <Link2 className="w-3.5 h-3.5" />
-                  <span>Establish New Link</span>
-                </button>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead>
-                    <tr className="border-b border-slate-800 bg-slate-900/60 text-slate-400 text-[10px] uppercase">
-                      <th className="py-2.5 px-4">Source Tier</th>
-                      <th className="py-2.5 px-4">Target Tier</th>
-                      <th className="py-2.5 px-4">Protocol</th>
-                      <th className="py-2.5 px-4">Bandwidth</th>
-                      <th className="py-2.5 px-4">Redundancy</th>
-                      <th className="py-2.5 px-4">Latency</th>
-                      <th className="py-2.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-slate-200">
-                    {interconnectLinks.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-6 text-center text-slate-500 font-sans text-xs">
-                          No cross-environment interconnect links configured. Click &quot;Establish New Link&quot; or connect nodes in the Step 4 canvas.
-                        </td>
-                      </tr>
-                    ) : (
-                      interconnectLinks.map(link => {
-                        const src = topologyEnvironments.find(e => e.id === link.sourceId);
-                        const tgt = topologyEnvironments.find(e => e.id === link.targetId);
-                        return (
-                          <tr key={link.id} className="hover:bg-slate-900/40 transition">
-                            <td className="py-2.5 px-4 font-bold text-cyan-300">
-                              {src?.name || link.sourceId}
-                            </td>
-                            <td className="py-2.5 px-4 font-bold text-emerald-300">
-                              {tgt?.name || link.targetId}
-                            </td>
-                            <td className="py-2.5 px-4 text-slate-300">{link.protocol}</td>
-                            <td className="py-2.5 px-4 text-cyan-400 font-bold">{link.bandwidthGbps} Gbps</td>
-                            <td className="py-2.5 px-4">
-                              {link.redundant ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 font-sans">
-                                  <ShieldCheck className="w-3 h-3" />
-                                  <span>Dual Circuit</span>
-                                </span>
-                              ) : (
-                                <span className="text-slate-500 text-[11px] font-sans">Single Circuit</span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-4 text-slate-400">{link.latencyMs || 2} ms</td>
-                            <td className="py-2.5 px-4 text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditLink(link)}
-                                  className="text-cyan-400 hover:text-cyan-300 cursor-pointer font-sans text-xs"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteLink(link.id)}
-                                  className="text-rose-400 hover:text-rose-300 cursor-pointer font-sans text-xs"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: DR & RESILIENCE INSPECTOR */}
-        {step3ActiveTab === 'dr' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* DR Engine */}
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-slate-300 font-medium text-xs flex items-center justify-between">
-                  <span>Replication & DR Engine</span>
-                  <span className="text-[10px] font-mono text-cyan-400">Validated</span>
-                </label>
-                <select
-                  value={drEngine}
-                  onChange={e => setDrEngine(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs font-semibold focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Nutanix Protection Domains (NearSync)">Nutanix Protection Domains (NearSync)</option>
-                  <option value="Nutanix Move / Prism Pairing">Nutanix Move / Prism Pairing</option>
-                  <option value="Nutanix Move Cross-Hypervisor">Nutanix Move Cross-Hypervisor</option>
-                  <option value="VMware SRM + vSphere Replication">VMware SRM + vSphere Replication</option>
-                  <option value="VMware HCX Bulk / Replication">VMware HCX Bulk / Replication</option>
-                  <option value="VMware HCX / Google Cloud Interconnect">VMware HCX / Google Cloud Interconnect</option>
-                  <option value="AWS Direct Connect + AWS DMS">AWS Direct Connect + AWS DMS</option>
-                  <option value="Google Cloud Partner Interconnect">Google Cloud Partner Interconnect</option>
-                  <option value="Multi-Cloud Cross-Replication">Multi-Cloud Cross-Replication</option>
-                </select>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Controls continuous data protection, storage block sync, and failover orchestration between environments.
-                </p>
-              </div>
-
-              {/* RPO & RTO SLA */}
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-slate-300 font-medium text-xs flex items-center justify-between">
-                  <span>Target RPO & RTO SLAs</span>
-                  {drRpoMinutes === 0 ? (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                      0-min Sync (Zero Data Loss)
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-mono text-cyan-400">{drRpoMinutes}-min RPO</span>
-                  )}
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase block">RPO (Minutes)</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="1440"
-                      value={drRpoMinutes}
-                      onChange={e => setDrRpoMinutes(Math.max(0, Number(e.target.value)))}
-                      className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono font-bold text-xs focus:border-cyan-500 focus:outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase block">RTO (Minutes)</span>
-                    <input
-                      type="number"
-                      min="5"
-                      max="1440"
-                      value={drRtoMinutes}
-                      onChange={e => setDrRtoMinutes(Math.max(5, Number(e.target.value)))}
-                      className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono font-bold text-xs focus:border-cyan-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Setting RPO to 0 designates synchronous zero-data-loss replication for critical database tiers.
-                </p>
-              </div>
-
-              {/* DR Topology Strategy */}
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                <label className="text-slate-300 font-medium text-xs">Failover Orchestration Strategy</label>
-                <select
-                  value={drStrategy}
-                  onChange={e => setDrStrategy(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs font-semibold focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="Pilot Light (3-Node Minimum)">Pilot Light (3-Node Minimum)</option>
-                  <option value="Warm Standby (Full Cluster)">Warm Standby (Full Cluster)</option>
-                  <option value="Cold Storage / On-Demand">Cold Storage / On-Demand</option>
-                  <option value="Hot Standby (Full Cluster)">Hot Standby (Active-Standby Mirror)</option>
-                </select>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Defines cloud standby capacity, standby power state, and pre-warmed host footprint at target site.
-                </p>
-              </div>
-            </div>
-
-            {/* Decoupled Storage Tier Configuration */}
-            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <HardDrive className="w-4 h-4 text-cyan-400" />
-                  <span className="font-semibold text-white text-xs">External Decoupled Storage Datastores</span>
-                </div>
-                <span className="text-[10px] font-mono text-slate-400">Offloads storage sprawl from Bare-Metal hosts</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                <div className="space-y-1">
-                  <label className="text-slate-400 text-[11px]">Decoupled Storage Allocation (TB)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="1000"
-                    value={decoupledStorageTB}
-                    onChange={e => setDecoupledStorageTB(Math.max(0, Number(e.target.value)))}
-                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono font-bold focus:border-cyan-500 focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-slate-400 text-[11px]">Storage Provider / Array Technology</label>
-                  <input
-                    type="text"
-                    readOnly
-                    value={externalStorageName}
-                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono text-xs cursor-default select-all"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Step 4: Dual-Mode Topology Viewport (Interactive Multi-Tier Canvas + Static 4K Viewport) */}
-      <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono text-cyan-400 font-bold uppercase">Step 4: Topology Canvas</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">
-                {topologyEnvironments.length} Nodes · {interconnectLinks.length} Interconnect Links
-              </span>
-            </div>
-            <h3 className="text-lg font-bold text-white">Interactive Multi-Cloud Architecture Canvas</h3>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Viewport Mode Switcher */}
-            <div className="flex items-center p-1 bg-slate-950 border border-slate-800 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setCanvasMode('interactive')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                  canvasMode === 'interactive'
-                    ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Network className="w-3.5 h-3.5" />
-                <span>Interactive Canvas</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setCanvasMode('static-vector')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                  canvasMode === 'static-vector'
-                    ? 'bg-cyan-500 text-slate-950 font-bold shadow'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Static 4K Vector Blueprint</span>
-              </button>
-            </div>
-
-            {/* Zoom Controls */}
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
-              <button
-                onClick={() => setZoomScale(prev => Math.max(0.6, prev - 0.1))}
-                className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-                title="Zoom Out"
-              >
-                <ZoomOut className="w-4 h-4" />
-              </button>
-              <span className="px-2 text-xs font-mono text-cyan-300">{Math.round(zoomScale * 100)}%</span>
-              <button
-                onClick={() => setZoomScale(prev => Math.min(1.8, prev + 0.1))}
-                className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setZoomScale(1.0)}
-                className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer text-[10px] font-mono"
-                title="Reset Zoom"
-              >
-                100%
-              </button>
-            </div>
-
-            {/* Export 4K PNG (Zero storage writes) */}
-            <button
-              onClick={() => handleExport4K('png')}
-              className="px-3 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>4K PNG</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Viewport Area */}
-        <div className="overflow-x-auto overflow-y-hidden border border-slate-800 rounded-xl bg-slate-950 p-4">
-          <div
-            style={{
-              transform: `scale(${zoomScale})`,
-              transformOrigin: 'top left',
-              transition: 'transform 0.15s ease-out',
-              width: '1280px',
-              height: '720px'
-            }}
-            className="relative bg-slate-950 border border-slate-800 rounded-lg overflow-hidden shadow-2xl select-none"
-            onMouseMove={handleCanvasMouseMove}
-            onMouseUp={handleCanvasMouseUp}
-          >
-            {canvasMode === 'interactive' ? (
-              /* ========================================================================= */
-              /* MODE 1: Interactive Multi-Tier Architecture Canvas                        */
-              /* ========================================================================= */
-              <div className="relative w-full h-full bg-slate-950 overflow-hidden">
-                {/* Canvas Background Grid */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                  <defs>
-                    <pattern id="interactiveGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
-                    </pattern>
-                  </defs>
-                  <rect width="1280" height="720" fill="url(#interactiveGrid)" />
-                </svg>
-
-                {/* Multi-Tier Column Background Dividers */}
-                <div className="absolute inset-0 grid grid-cols-3 pointer-events-none border-b border-slate-900">
-                  <div className="border-r border-slate-800/60 p-4 bg-slate-900/10">
-                    <span className="text-[11px] font-mono font-bold text-cyan-400/70 tracking-wider uppercase">
-                      TIER 1: SOURCE & ON-PREMISES DC
-                    </span>
-                  </div>
-                  <div className="border-r border-slate-800/60 p-4 bg-slate-900/20">
-                    <span className="text-[11px] font-mono font-bold text-indigo-400/70 tracking-wider uppercase">
-                      TIER 2: TRANSIT & SECURITY HUBS
-                    </span>
-                  </div>
-                  <div className="p-4 bg-slate-900/10">
-                    <span className="text-[11px] font-mono font-bold text-emerald-400/70 tracking-wider uppercase">
-                      TIER 3: TARGET CLOUD SDDC / NATIVE / DR
-                    </span>
-                  </div>
-                </div>
-
-                {/* Floating Connecting Mode Banner */}
-                {connectingSourceId && (
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-amber-950/90 border border-amber-500 shadow-xl flex items-center gap-3 text-xs text-amber-200">
-                    <Activity className="w-4 h-4 text-amber-400 animate-pulse" />
-                    <span>
-                      Connecting from: <strong>{topologyEnvironments.find(e => e.id === connectingSourceId)?.name}</strong>. Click target node to establish link.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setConnectingSourceId(null)}
-                      className="px-2 py-0.5 rounded bg-amber-900 hover:bg-amber-800 text-white text-[10px] font-mono cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                )}
-
-                {/* Interactive SVG Interconnect Curves */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
-                  {interconnectLinks.map(link => {
-                    const sourceNode = topologyEnvironments.find(e => e.id === link.sourceId);
-                    const targetNode = topologyEnvironments.find(e => e.id === link.targetId);
-                    if (!sourceNode || !targetNode) return null;
-
-                    const sx = (sourceNode.x ?? 80) + 290;
-                    const sy = (sourceNode.y ?? 120) + 70;
-                    const tx = (targetNode.x ?? 780);
-                    const ty = (targetNode.y ?? 120) + 70;
-
-                    const dx = Math.abs(tx - sx) * 0.45;
-                    const pathData = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
-                    const strokeColor = link.protocol.includes('ExpressRoute')
-                      ? '#38bdf8'
-                      : link.protocol.includes('Direct Connect')
-                      ? '#f59e0b'
-                      : link.protocol.includes('Interconnect')
-                      ? '#60a5fa'
-                      : link.protocol.includes('Move') || link.protocol.includes('HCX')
-                      ? '#10b981'
-                      : '#c084fc';
-
-                    const midX = (sx + tx) / 2;
-                    const midY = (sy + ty) / 2;
-
-                    return (
-                      <g key={link.id}>
-                        {/* Glow halo */}
-                        <path d={pathData} fill="none" stroke={strokeColor} strokeWidth="6" opacity="0.2" />
-                        {/* Main connection line */}
-                        <path d={pathData} fill="none" stroke={strokeColor} strokeWidth="2.5" />
-                        {/* Directional animated dashes */}
-                        <path
-                          d={pathData}
-                          fill="none"
-                          stroke="#ffffff"
-                          strokeWidth="1.5"
-                          strokeDasharray="6,8"
-                          opacity="0.8"
-                        />
-                        {/* Link Protocol & Bandwidth Badge */}
-                        <foreignObject
-                          x={midX - 70}
-                          y={midY - 14}
-                          width="140"
-                          height="28"
-                          className="pointer-events-auto"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditLink(link)}
-                            className="w-full h-full px-2 py-0.5 rounded-full bg-slate-900/90 border border-slate-700 hover:border-cyan-400 text-[10px] font-mono text-slate-200 hover:text-white flex items-center justify-center gap-1 shadow-lg cursor-pointer transition"
-                            title={`Click to edit or remove ${link.protocol} link (${link.bandwidthGbps} Gbps)`}
-                          >
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-                            <span className="font-bold text-cyan-300">{link.bandwidthGbps}G</span>
-                            <span className="truncate">{link.protocol.split(' ')[0]}</span>
-                          </button>
-                        </foreignObject>
-                      </g>
-                    );
-                  })}
-                </svg>
-
-                {/* Interactive Node Cards */}
-                <div className="absolute inset-0 z-20 pointer-events-auto">
-                  {topologyEnvironments.map(env => {
-                    const isSourceSelected = connectingSourceId === env.id;
-                    const isTargetCandidate = Boolean(connectingSourceId && connectingSourceId !== env.id);
-                    const isSelected = selectedNodeId === env.id;
-
-                    const isProd = env.role === 'Production';
-                    const isDR = env.role === 'Disaster Recovery';
-                    const isShared = env.role === 'Shared Services';
-
-                    return (
-                      <div
-                        key={env.id}
-                        style={{
-                          transform: `translate(${env.x ?? 80}px, ${env.y ?? 120}px)`,
-                          width: '290px'
-                        }}
-                        onMouseDown={e => handleNodeMouseDown(e, env)}
-                        className={`absolute rounded-xl bg-slate-900/95 border shadow-2xl transition-shadow select-none ${
-                          isSourceSelected
-                            ? 'border-amber-400 ring-2 ring-amber-400/50 shadow-amber-950/50'
-                            : isTargetCandidate
-                            ? 'border-cyan-400 ring-2 ring-cyan-400/40 animate-pulse'
-                            : isSelected
-                            ? 'border-cyan-500 ring-1 ring-cyan-500'
-                            : 'border-slate-800 hover:border-slate-700'
-                        }`}
-                      >
-                        {/* Draggable Card Header */}
-                        <div className="p-3 border-b border-slate-800/80 flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing bg-slate-950/40 rounded-t-xl">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <GripVertical className="w-4 h-4 text-slate-500 shrink-0" />
-                            <div className="p-1 rounded bg-slate-900 border border-slate-800 shrink-0">
-                              {env.platform.includes('Nutanix') ? (
-                                <NutanixAhvIcon className="w-4 h-4 text-emerald-400" />
-                              ) : env.platform.includes('Azure') ? (
-                                <AzureVirtualWanIcon className="w-4 h-4 text-sky-400" />
-                              ) : env.platform.includes('AWS') ? (
-                                <AwsTransitGatewayIcon className="w-4 h-4 text-amber-400" />
-                              ) : env.platform.includes('Google') || env.platform.includes('GCP') ? (
-                                <GcpInterconnectIcon className="w-4 h-4 text-blue-400" />
-                              ) : (
-                                <VmwareVcenterIcon className="w-4 h-4 text-indigo-400" />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <h4 className="text-xs font-bold text-white truncate">{env.name}</h4>
-                              <p className="text-[10px] text-slate-400 truncate">{env.region}</p>
-                            </div>
-                          </div>
-                          <span
-                            className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border shrink-0 ${
-                              isProd
-                                ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
-                                : isDR
-                                ? 'bg-amber-950 text-amber-300 border-amber-700'
-                                : isShared
-                                ? 'bg-slate-900 text-slate-300 border-slate-700'
-                                : 'bg-sky-950 text-sky-300 border-sky-700'
-                            }`}
-                          >
-                            {env.role}
-                          </span>
-                        </div>
-
-                        {/* Card Body - Infrastructure Metrics */}
-                        <div className="p-3 space-y-2 text-[11px] font-mono">
-                          <div className="grid grid-cols-3 gap-1.5 text-center bg-slate-950/50 p-2 rounded-lg border border-slate-800/60">
-                            <div>
-                              <span className="text-[9px] text-slate-500 block">HOSTS</span>
-                              <span className="font-bold text-white text-xs">{env.hostCount}</span>
-                            </div>
-                            <div>
-                              <span className="text-[9px] text-slate-500 block">VCPU</span>
-                              <span className="font-bold text-cyan-300 text-xs">{env.totalVcpu}</span>
-                            </div>
-                            <div>
-                              <span className="text-[9px] text-slate-500 block">STORAGE</span>
-                              <span className="font-bold text-emerald-300 text-xs">{env.storageTB}T</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                            <span>CIDR: {env.cidrBlock}</span>
-                            <span className="text-slate-500 truncate max-w-[120px]">{env.nodeSku.split(' ')[0]}</span>
-                          </div>
-                        </div>
-
-                        {/* Card Action Footer */}
-                        <div className="p-2 border-t border-slate-800/80 bg-slate-950/30 rounded-b-xl flex items-center justify-between gap-1 text-[10px]">
-                          {isTargetCandidate ? (
-                            <button
-                              type="button"
-                              onClick={() => handleFinishConnect(env.id)}
-                              className="w-full py-1 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold flex items-center justify-center gap-1 cursor-pointer transition shadow"
-                            >
-                              <Link2 className="w-3 h-3" />
-                              <span>Connect Here</span>
-                            </button>
-                          ) : isSourceSelected ? (
-                            <span className="w-full text-center py-1 text-amber-300 font-mono font-semibold">
-                              Source Selected
-                            </span>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleStartConnect(env.id)}
-                                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 flex items-center gap-1 cursor-pointer transition"
-                                title="Start drawing connection link to another node"
-                              >
-                                <Link2 className="w-3 h-3" />
-                                <span>Connect</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedNodeId(env.id)}
-                                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1 cursor-pointer transition"
-                                title="Inspect and edit node sizing parameters"
-                              >
-                                <Settings2 className="w-3 h-3 text-slate-400" />
-                                <span>Inspect</span>
-                              </button>
-                              {topologyEnvironments.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => promptRemoveEnvironment(env.id)}
-                                  className="px-2 py-1 rounded hover:bg-rose-950 text-slate-500 hover:text-rose-400 cursor-pointer transition"
-                                  title="Remove environment"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Node Spec Inspector Drawer / Modal */}
-                {selectedNodeId && (() => {
-                  const inspectingNode = topologyEnvironments.find(e => e.id === selectedNodeId);
-                  if (!inspectingNode) return null;
-                  const nodeLinks = interconnectLinks.filter(
-                    l => l.sourceId === inspectingNode.id || l.targetId === inspectingNode.id
-                  );
-
-                  return (
-                    <div className="absolute top-4 right-4 z-40 w-96 rounded-2xl bg-slate-900 border border-cyan-500/50 shadow-2xl p-5 text-slate-100 space-y-4 animate-in slide-in-from-right duration-150">
-                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Settings2 className="w-4 h-4 text-cyan-400" />
-                          <h4 className="text-xs font-bold text-white truncate">Node Spec Inspector</h4>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedNodeId(null)}
-                          className="p-1 rounded-lg text-slate-400 hover:text-white"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="space-y-3 text-xs">
-                        <div className="space-y-1">
-                          <label className="text-slate-400 text-[10px] uppercase font-mono">Environment Name</label>
-                          <input
-                            type="text"
-                            value={inspectingNode.name}
-                            onChange={e => handleUpdateNodeSpec(inspectingNode.id, { name: e.target.value })}
-                            className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-semibold"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <label className="text-slate-400 text-[10px] uppercase font-mono">Platform</label>
-                            <input
-                              type="text"
-                              disabled
-                              value={inspectingNode.platform}
-                              className="w-full px-2.5 py-1.5 bg-slate-950/60 border border-slate-800 rounded text-slate-400 text-xs"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-slate-400 text-[10px] uppercase font-mono">Region</label>
-                            <input
-                              type="text"
-                              value={inspectingNode.region}
-                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { region: e.target.value })}
-                              className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-2 font-mono">
-                          <div className="space-y-1">
-                            <label className="text-slate-400 text-[10px] uppercase">Hosts</label>
-                            <input
-                              type="number"
-                              min="0"
-                              max="64"
-                              value={inspectingNode.hostCount}
-                              onChange={e =>
-                                handleUpdateNodeSpec(inspectingNode.id, {
-                                  hostCount: Number(e.target.value),
-                                  totalVcpu: Number(e.target.value) * 36,
-                                  totalRamGB: Number(e.target.value) * 576
-                                })
-                              }
-                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-white text-xs"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-slate-400 text-[10px] uppercase">vCPU</label>
-                            <input
-                              type="number"
-                              value={inspectingNode.totalVcpu}
-                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { totalVcpu: Number(e.target.value) })}
-                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-cyan-300 text-xs"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-slate-400 text-[10px] uppercase">Storage TB</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={inspectingNode.storageTB}
-                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { storageTB: Number(e.target.value) })}
-                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-emerald-300 text-xs"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-slate-400 text-[10px] uppercase font-mono">Management CIDR</label>
-                          <input
-                            type="text"
-                            value={inspectingNode.cidrBlock}
-                            onChange={e => handleUpdateNodeSpec(inspectingNode.id, { cidrBlock: e.target.value })}
-                            className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
-                          />
-                        </div>
-
-                        {/* Connected Interconnect Links */}
-                        <div className="space-y-1.5 pt-2 border-t border-slate-800">
-                          <span className="text-slate-400 text-[10px] uppercase font-mono block">Connected Links ({nodeLinks.length})</span>
-                          {nodeLinks.length === 0 ? (
-                            <p className="text-[11px] text-slate-500">Unlinked zone. Click 'Connect' on canvas to create an interconnect link.</p>
-                          ) : (
-                            <div className="space-y-1.5">
-                              {nodeLinks.map(link => (
-                                <div key={link.id} className="p-2 rounded bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
-                                  <div className="truncate pr-2">
-                                    <span className="text-cyan-400 font-mono font-bold">{link.bandwidthGbps}G</span> · {link.protocol}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteLink(link.id)}
-                                    className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-800 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedNodeId(null)}
-                          className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold cursor-pointer"
-                        >
-                          Done
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Configure Interconnect Link Modal */}
-                {showLinkModal && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
-                    <div className="relative w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100 space-y-4">
-                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Link2 className="w-4 h-4 text-cyan-400" />
-                          <h4 className="text-sm font-bold text-white">
-                            {editingLinkId ? 'Edit Interconnect Link' : 'Establish Network Interconnect Link'}
-                          </h4>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowLinkModal(false)}
-                          className="p-1 text-slate-400 hover:text-white"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="space-y-3 text-xs">
-                        <div className="grid grid-cols-2 gap-3 p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px]">
-                          <div>
-                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Source</span>
-                            <span className="font-bold text-cyan-300">
-                              {topologyEnvironments.find(e => e.id === linkModalSourceId)?.name}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Target</span>
-                            <span className="font-bold text-emerald-300">
-                              {topologyEnvironments.find(e => e.id === linkModalTargetId)?.name}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-slate-300 font-medium">Interconnect Protocol</label>
-                          <select
-                            value={linkProtocol}
-                            onChange={e => setLinkProtocol(e.target.value as any)}
-                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
-                          >
-                            <option value="ExpressRoute FastPath">Azure ExpressRoute FastPath (Ultra High Speed)</option>
-                            <option value="AWS Direct Connect">AWS Direct Connect Gateway (10G Dedicated)</option>
-                            <option value="Google Cloud Interconnect">Google Cloud Dedicated Interconnect</option>
-                            <option value="IPsec VPN">Site-to-Site IPsec VPN Tunnel</option>
-                            <option value="VMware HCX L2 Extension">VMware HCX Network Extension (L2 Stretch)</option>
-                            <option value="Nutanix Move">Nutanix Move Non-Disruptive Migration Pipe</option>
-                            <option value="Nutanix Protection Domain / Leap">Nutanix Protection Domains (NearSync / Leap)</option>
-                            <option value="VNet / VPC Peering">Cloud Native VNet / VPC Peering</option>
-                            <option value="Transit Gateway Route">Transit Gateway Inter-Region Peering</option>
-                          </select>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <label className="text-slate-300 font-medium">Bandwidth (Gbps)</label>
-                            <select
-                              value={linkBandwidth}
-                              onChange={e => setLinkBandwidth(Number(e.target.value))}
-                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs font-mono font-bold text-cyan-400"
-                            >
-                              <option value="1">1 Gbps</option>
-                              <option value="10">10 Gbps</option>
-                              <option value="25">25 Gbps</option>
-                              <option value="40">40 Gbps</option>
-                              <option value="100">100 Gbps</option>
-                            </select>
-                          </div>
-                          <div className="flex items-center pt-5">
-                            <label className="flex items-center gap-2 cursor-pointer text-slate-300">
-                              <input
-                                type="checkbox"
-                                checked={linkRedundant}
-                                onChange={e => setLinkRedundant(e.target.checked)}
-                                className="rounded bg-slate-950 border-slate-800 text-cyan-500"
-                              />
-                              <span>Dual Redundant Circuit</span>
-                            </label>
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-slate-300 font-medium">Notes & Annotations</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Dedicated 10G pipe with 99.99% SLA"
-                            value={linkNotes}
-                            onChange={e => setLinkNotes(e.target.value)}
-                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-                        {editingLinkId ? (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLink(editingLinkId)}
-                            className="px-3 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 text-xs font-semibold cursor-pointer"
-                          >
-                            Delete Link
-                          </button>
-                        ) : (
-                          <div />
-                        )}
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowLinkModal(false)}
-                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleSaveLink}
-                            className="px-4 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold cursor-pointer"
-                          >
-                            {editingLinkId ? 'Save Changes' : 'Establish Link'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (() => {
-              /* ========================================================================= */
-              /* MODE 2: Track-Aware High-Fidelity 4K Vector Blueprint Viewport            */
-              /* ========================================================================= */
-              const vectorSpec = buildTrackVisualSpec(activeTemplate, {
-                customerName,
-                sourceEnv: topologyMetrics.primarySource,
-                transitEnv: topologyMetrics.primaryTransit,
-                targetEnv: topologyMetrics.primaryTarget,
-                totalVMs: topologyMetrics.totalVMs,
-                interconnectLinks,
-                connectivity,
-                landingZone,
-                nvaFirewall,
-                wafSolution,
-                drEngine,
-                drRpoMinutes,
-                drRtoMinutes,
-                drStrategy,
-                externalStorageName,
-                decoupledStorageTB
-              });
-
-              return (
-                <svg viewBox="0 0 1280 720" className="w-full h-full select-none">
-                  {/* Grid Background */}
-                  <defs>
-                    <pattern id="diagGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
-                    </pattern>
-                  </defs>
-                  <rect width="1280" height="720" fill="url(#diagGrid)" />
-
-                  {/* Header Box */}
-                  <rect x="30" y="25" width="1220" height="65" rx="8" fill="#0f172a" stroke="#06b6d4" strokeWidth="1.5" />
-                  <text x="50" y="52" fill="#ffffff" fontSize="15" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    {vectorSpec.title.toUpperCase()}
-                  </text>
-                  <text x="50" y="74" fill="#94a3b8" fontSize="11" fontFamily="JetBrains Mono">
-                    ARCHITECT: {architectName} · DATE: {projectDate} · TRACK: {activeTemplate.toUpperCase()} · DR: {drEngine} ({drRpoMinutes === 0 ? '0-min Sync' : `${drRpoMinutes}-min RPO`})
-                  </text>
-
-                  {/* Panel 1 (Left) */}
-                  <rect x="30" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                  <text x="50" y="140" fill="#06b6d4" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    {vectorSpec.panel1Header}
-                  </text>
-
-                  {/* Panel 1 Box 1 */}
-                  <rect x="50" y="160" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="65" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box1.title}</text>
-                  {vectorSpec.panel1Box1.bullets.map((b, i) => (
-                    <text key={i} x="65" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 1 Box 2 */}
-                  <rect x="50" y="325" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="65" y="350" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box2.title}</text>
-                  {vectorSpec.panel1Box2.bullets.map((b, i) => (
-                    <text key={i} x="65" y={375 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 1 Box 3 */}
-                  <rect x="50" y="470" width="330" height="180" rx="6" fill="#064e3b" stroke="#10b981" strokeWidth="1" />
-                  <text x="65" y="495" fill="#34d399" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box3.title}</text>
-                  {vectorSpec.panel1Box3.bullets.map((b, i) => (
-                    <text key={i} x="65" y={520 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 2 (Center) */}
-                  <rect x="430" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                  <text x="450" y="140" fill="#38bdf8" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    {vectorSpec.panel2Header}
-                  </text>
-
-                  {/* Panel 2 Box 1 */}
-                  <rect x="450" y="160" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="465" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box1.title}</text>
-                  {vectorSpec.panel2Box1.bullets.map((b, i) => (
-                    <text key={i} x="465" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 2 Box 2 */}
-                  <rect x="450" y="305" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="465" y="330" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box1.title ? vectorSpec.panel2Box2.title : ''}</text>
-                  {vectorSpec.panel2Box2.bullets.map((b, i) => (
-                    <text key={i} x="465" y={355 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 2 Box 3 */}
-                  <rect x="450" y="470" width="330" height="180" rx="6" fill="#581c87" stroke="#a855f7" strokeWidth="1" />
-                  <text x="465" y="495" fill="#d8b4fe" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box3.title}</text>
-                  {vectorSpec.panel2Box3.bullets.map((b, i) => (
-                    <text key={i} x="465" y={520 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 3 (Right) */}
-                  <rect x="830" y="110" width="420" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                  <text x="850" y="140" fill="#10b981" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                    {vectorSpec.panel3Header}
-                  </text>
-
-                  {/* Panel 3 Box 1 */}
-                  <rect x="850" y="160" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="865" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box1.title}</text>
-                  {vectorSpec.panel3Box1.bullets.map((b, i) => (
-                    <text key={i} x="865" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 3 Box 2 */}
-                  <rect x="850" y="325" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                  <text x="865" y="350" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box2.title}</text>
-                  {vectorSpec.panel3Box2.bullets.map((b, i) => (
-                    <text key={i} x="865" y={375 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Panel 3 Box 3 */}
-                  <rect x="850" y="490" width="380" height="160" rx="6" fill="#0c4a6e" stroke="#0284c7" strokeWidth="1" />
-                  <text x="865" y="515" fill="#38bdf8" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box3.title}</text>
-                  {vectorSpec.panel3Box3.bullets.map((b, i) => (
-                    <text key={i} x="865" y={540 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
-                  ))}
-
-                  {/* Interconnect Connecting Arrows */}
-                  <path d="M 380 540 L 450 220" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-                  <path d="M 780 380 L 850 380" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-                </svg>
-              );
-            })()}
-          </div>
-        </div>
-      </div>
 
       {/* Google Drive Workspace Bridge */}
       <div className="p-5 rounded-xl bg-slate-900 border border-cyan-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
